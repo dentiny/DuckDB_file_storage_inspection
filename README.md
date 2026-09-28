@@ -9,10 +9,13 @@ Type a path on this machine (`~/data/app.duckdb`), open or drop a file, or paste
 ## Usage
 
 ```sh
-npm install
-npm run open -- ~/data/app.duckdb   # starts the dev server and opens the file
-npm run dev                         # http://localhost:5173/?db=sensors.duckdb
+npm start                                   # http://localhost:5173, installs dependencies on first run
+npm start -- --port 8080                    # another port; PORT=8080 npm start works too
+npm start -- ~/data/app.duckdb              # opens that database right away
+npm start -- ~/data/app.duckdb --no-open    # prints the link instead of opening a browser
 ```
+
+`node scripts/start.ts` does the same without npm.
 
 Paths are served by a small route in the dev and preview servers (`server/local-files.ts`) that only serves files starting with DuckDB's magic bytes. Files picked with **Open file** never leave the browser.
 
