@@ -1,6 +1,7 @@
 import { getContext, setContext } from "svelte";
 import type { DuckDBModel, Piece, RowGroupInfo } from "./duckdb/model";
 import type { WalFile } from "./duckdb/wal";
+import { WalView } from "./walview.svelte";
 
 export interface Popover {
   piece: Piece;
@@ -31,17 +32,15 @@ export class Inspector {
   showAllRowGroups = $state(false);
   /** Row group hovered in the list, outlined in the file map. */
   hoveredRg = $state.raw<RowGroupInfo | null>(null);
+  /** Byte ranges outlined in the file map from elsewhere, e.g. where a header pointer leads. */
+  highlight = $state.raw<{ start: number; end: number }[] | null>(null);
   /** Bumped when a row group is selected from outside the list, so the list scrolls to it. */
   revealTick = $state(0);
   /** Whether the last reveal should also scroll the page, when the list may be off screen. Read untracked. */
   revealInPage = false;
   popover = $state.raw<Popover | null>(null);
   /** The write-ahead log next to the database, once found or picked. */
-  wal = $state.raw<WalFile | null>(null);
-  /** Whether the log could be looked for; a file picked in the browser can't see its sibling `.wal`. */
-  readonly walSearched: boolean;
-  /** Index of the WAL entry whose contents are shown. */
-  selectedWalEntry = $state<number | null>(null);
+  readonly walView: WalView;
 
   constructor(
     model: DuckDBModel,
@@ -52,8 +51,7 @@ export class Inspector {
     walSearched = true,
   ) {
     this.model = model;
-    this.wal = wal;
-    this.walSearched = walSearched;
+    this.walView = new WalView(wal, walSearched, model);
     this.source = source;
     this.loadSummary = loadSummary;
     const byRows = model.tables.reduce(
@@ -69,14 +67,14 @@ export class Inspector {
     if (this.selectedRg !== null) this.revealTick += 1;
   }
 
+  /** The table whose row groups are listed; null when there are no tables, e.g. DuckDB couldn't open the file. */
   get table() {
-    const table = this.model.tables[this.selectedTable];
-    if (!table) throw new Error(`no table ${this.selectedTable}`);
-    return table;
+    return this.model.tables[this.selectedTable] ?? null;
   }
 
   get selectedGroup(): RowGroupInfo | null {
-    return this.selectedRg === null ? null : (this.table.rowGroups.find((g) => g.rg === this.selectedRg) ?? null);
+    if (this.selectedRg === null) return null;
+    return this.table?.rowGroups.find((g) => g.rg === this.selectedRg) ?? null;
   }
 
   selectTable(table: number): void {
@@ -110,10 +108,6 @@ export class Inspector {
     if (table !== undefined) this.selectTable(table);
     this.selectedLeaf = this.selectedLeaf === leaf ? null : leaf;
     this.showAllRowGroups = false;
-  }
-
-  toggleWalEntry(index: number): void {
-    this.selectedWalEntry = this.selectedWalEntry === index ? null : index;
   }
 
   showPopover(piece: Piece | null, event: MouseEvent, opensRowGroup = false): void {

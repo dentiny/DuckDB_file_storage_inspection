@@ -7,21 +7,30 @@ import type { Connect, Plugin } from "vite";
 import { LOCAL_PREFIX, WAL_HEADER } from "../src/lib/duckdb/source";
 
 /** Resolves `~` and relative paths against the directory the server was started in. */
-export function resolveLocalPath(raw: string, cwd = process.cwd()): string {
+function resolveLocalPath(raw: string, cwd = process.cwd()): string {
   const expanded = raw === "~" || raw.startsWith("~/") ? path.join(homedir(), raw.slice(1)) : raw;
   return path.resolve(cwd, expanded);
 }
 
-async function isDuckDB(file: string): Promise<boolean> {
-  const handle = await open(file, "r");
+/** `length` bytes of `file` from `offset`; fewer when the file is shorter, none when it can't be read. */
+async function readBytes(file: string, offset: number, length: number): Promise<Buffer> {
   try {
-    const magic = Buffer.alloc(4);
-    await handle.read(magic, 0, 4, 8);
-    return magic.toString("latin1") === "DUCK";
-  } finally {
-    await handle.close();
+    const handle = await open(file, "r");
+    try {
+      const out = Buffer.alloc(length);
+      const { bytesRead } = await handle.read(out, 0, length, offset);
+      return out.subarray(0, bytesRead);
+    } finally {
+      await handle.close();
+    }
+  } catch {
+    return Buffer.alloc(0);
   }
 }
+
+const isDuckDB = async (file: string) => (await readBytes(file, 8, 4)).toString("latin1") === "DUCK";
+/** A WAL starts with its version entry, whose first field id is 100. */
+const isWal = async (file: string) => (await readBytes(file, 0, 2)).equals(Buffer.from([0x64, 0x00]));
 
 async function walSize(file: string): Promise<number> {
   try {
@@ -41,7 +50,7 @@ function fail(res: ServerResponse, status: number, message: string) {
  * Serves DuckDB files from this machine by path with HTTP range requests, so DuckDB-Wasm can read one block at a
  * time. Only files that start with DuckDB's magic bytes are served.
  */
-export async function serveLocalFile(req: IncomingMessage, res: ServerResponse): Promise<void> {
+async function serveLocalFile(req: IncomingMessage, res: ServerResponse): Promise<void> {
   const url = new URL(req.url ?? "", "http://localhost");
   const raw = url.searchParams.get("path");
   if (!raw) return fail(res, 400, "missing ?path=");
@@ -54,10 +63,17 @@ export async function serveLocalFile(req: IncomingMessage, res: ServerResponse):
   } catch {
     return fail(res, 404, `no file at ${file}`);
   }
-  // A write-ahead log has no magic bytes of its own; serve it when the database it belongs to is one.
-  const database = file.endsWith(".wal") ? file.slice(0, -".wal".length) : file;
-  if (!(await isDuckDB(database).catch(() => false))) {
-    return fail(res, 415, `${database} doesn't start with DuckDB's magic bytes`);
+  // A write-ahead log has no magic bytes of its own: serve it when its database is a DuckDB file, or when it
+  // starts like a WAL, so a log can be inspected without its database.
+  const wal = file.endsWith(".wal");
+  const database = wal ? file.slice(0, -".wal".length) : file;
+  const allowed = (await isDuckDB(database)) || (wal && (await isWal(file)));
+  if (!allowed) {
+    return fail(
+      res,
+      415,
+      wal ? `${file} isn't a DuckDB write-ahead log` : `${file} doesn't start with DuckDB's magic bytes`,
+    );
   }
 
   res.setHeader("accept-ranges", "bytes");

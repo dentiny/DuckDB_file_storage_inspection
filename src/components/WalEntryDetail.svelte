@@ -1,14 +1,12 @@
 <script lang="ts">
   import { formatBytes, formatNumber } from "../lib/format";
-  import { getInspector } from "../lib/inspector.svelte";
   import { decodeEntry, isIncomplete, type WalEntry, type WalFile } from "../lib/duckdb/wal";
 
   /** Bytes of the raw entry shown in the hex dump. */
   const HEX_BYTES = 512;
 
-  let { wal, entry }: { wal: WalFile; entry: WalEntry } = $props();
+  let { wal, entry, onclose }: { wal: WalFile; entry: WalEntry; onclose: () => void } = $props();
 
-  const inspector = getInspector();
   const detail = $derived(decodeEntry(wal, entry));
   const incomplete = $derived(isIncomplete(entry));
   const facts = $derived<[string, string][]>([
@@ -99,7 +97,7 @@
     </div>
   </details>
 
-  <button type="button" class="close" onclick={() => (inspector.selectedWalEntry = null)}>Close</button>
+  <button type="button" class="close" onclick={onclose}>Close</button>
 </div>
 
 <style>

@@ -3,7 +3,7 @@
   import { readEfficiency, summarizeNames } from "../lib/duckdb/efficiency";
 
   const inspector = getInspector();
-  const checks = $derived(readEfficiency(inspector.model, inspector.wal));
+  const checks = $derived(readEfficiency(inspector.model, inspector.walView.wal));
 
   // Phones have no hover, so tapping a badge shows its explanation under the badges instead of a tooltip.
   let note = $state("");

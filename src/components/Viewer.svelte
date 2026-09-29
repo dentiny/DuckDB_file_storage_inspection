@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Allocation from "./Allocation.svelte";
   import FileSummary from "./FileSummary.svelte";
   import FileMap from "./FileMap.svelte";
   import Popover from "./Popover.svelte";
@@ -17,7 +18,7 @@
     const { source, selectedRg, selectedLeaf, model } = inspector;
     if (source === null) return;
     const col = selectedLeaf === null ? null : (model.leaves[selectedLeaf]?.name ?? null);
-    publishQuery(toQuery({ db: source, table: inspector.table.qualified, rg: selectedRg, col }));
+    publishQuery(toQuery({ db: source, table: inspector.table?.qualified ?? null, rg: selectedRg, col }));
   });
 </script>
 
@@ -26,7 +27,8 @@
 <main>
   <FileSummary />
   <FileMap />
-  <WalPanel />
+  <Allocation />
+  <WalPanel view={inspector.walView} />
   <div class="columns">
     <Schema />
     <RowGroups />

@@ -55,7 +55,7 @@
   }
 
   .strip .header {
-    background: #111827;
+    background: #94a3b8;
   }
 
   .strip .validity {

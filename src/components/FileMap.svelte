@@ -16,7 +16,7 @@
   const seams = Array.from({ length: header.blockCount + 1 }, (_, b) => blockStart(header, b));
   const partsOf = (g: RowGroupInfo | null) => g?.chunks.flatMap((c) => c.parts) ?? [];
   const selected = $derived(partsOf(inspector.selectedGroup));
-  const highlighted = $derived(partsOf(inspector.hoveredRg));
+  const highlighted = $derived(inspector.highlight ?? partsOf(inspector.hoveredRg));
   const tables = model.tables.length;
 </script>
 
@@ -28,12 +28,16 @@
           <b>Blocks</b> · {formatNumber(header.blockCount)} × {formatBytes(header.blockAllocSize)}
           <span class="on-hover">· click a segment to open its row group</span>
         </span>
-        <span>{formatBytes(model.fileSize - BLOCKS_START)}</span>
+        <span>
+          {model.expectedSize > model.fileSize
+            ? `${formatBytes(model.fileSize)} of ${formatBytes(model.expectedSize)}`
+            : formatBytes(model.fileSize - BLOCKS_START)}
+        </span>
       </div>
       <ByteStrip
         pieces={body}
         from={BLOCKS_START}
-        to={Math.max(model.fileSize, BLOCKS_START + 1)}
+        to={Math.max(model.expectedSize, BLOCKS_START + 1)}
         label="File layout"
         {seams}
         {selected}
@@ -49,7 +53,7 @@
         <span><b>Headers</b> magnified</span>
         <span>{formatBytes(BLOCKS_START)}</span>
       </div>
-      <ByteStrip pieces={head} from={0} to={BLOCKS_START} label="Headers" />
+      <ByteStrip pieces={head} from={0} to={BLOCKS_START} label="Headers" {highlighted} />
     </div>
   </div>
   <Legend />

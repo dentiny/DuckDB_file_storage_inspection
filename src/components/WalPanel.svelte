@@ -1,16 +1,15 @@
 <script lang="ts">
   import WalEntryDetail from "./WalEntryDetail.svelte";
   import { formatBytes, formatNumber } from "../lib/format";
-  import { getInspector } from "../lib/inspector.svelte";
-  import { walFor } from "../lib/duckdb/load";
-  import { MAX_WAL_BYTES } from "../lib/duckdb/source";
   import { isIncomplete, type WalEntry } from "../lib/duckdb/wal";
+  import type { WalView } from "../lib/walview.svelte";
 
   /** Long logs list this many entries until asked for the rest. */
   const MAX_LISTED = 400;
 
-  const inspector = getInspector();
-  const wal = $derived(inspector.wal);
+  let { view }: { view: WalView } = $props();
+
+  const wal = $derived(view.wal);
   const entries = $derived(wal?.entries ?? []);
   const incomplete = $derived(entries.filter(isIncomplete).length);
   const changes = $derived(entries.filter((e) => e.category !== "commit" && e.typeName !== "WAL_VERSION").length);
@@ -21,7 +20,7 @@
 
   // Opening an entry from the strip, or near the bottom of the list, scrolls it into view with its details.
   $effect(() => {
-    const index = inspector.selectedWalEntry;
+    const index = view.selected;
     if (index === null || !list) return;
     if (index >= listed.length) showAll = true;
     requestAnimationFrame(() => {
@@ -33,12 +32,8 @@
   async function onchange(event: Event & { currentTarget: HTMLInputElement }) {
     const file = event.currentTarget.files?.[0];
     if (!file) return;
-    error = "";
-    const bytes = new Uint8Array(await file.slice(0, MAX_WAL_BYTES).arrayBuffer());
-    const parsed = walFor({ name: file.name, bytes, size: file.size }, inspector.model);
-    if (parsed.entries[0]?.type === -1) error = `${file.name} doesn't look like a DuckDB write-ahead log.`;
-    inspector.selectedWalEntry = null;
-    inspector.wal = parsed;
+    await view.open(file);
+    error = view.wal?.entries[0]?.type === -1 ? `${file.name} doesn't look like a DuckDB write-ahead log.` : "";
   }
 
   function label(e: WalEntry): string {
@@ -77,7 +72,7 @@
 
   {#if !wal}
     <p class="empty">
-      {inspector.walSearched
+      {view.searched
         ? "No .wal next to this database: every committed change is already in its blocks."
         : "A file picked in the browser can't see the .wal next to it. Open it here, or pick both files together."}
     </p>
@@ -85,6 +80,7 @@
     <p class="note">
       DuckDB appends every committed change here and replays the log when it next opens the database, until a checkpoint
       moves the changes into blocks. Click an entry to see what it holds.
+      {#if !view.model}Shown without its database, so column names come only from CREATE TABLE entries in the log.{/if}
     </p>
     {#each wal.notes as note (note)}<p class="note warn">{note}</p>{/each}
 
@@ -95,11 +91,11 @@
             type="button"
             class="cell {e.category}"
             class:incomplete={isIncomplete(e)}
-            class:selected={inspector.selectedWalEntry === e.index}
+            class:selected={view.selected === e.index}
             style:flex-grow={grow(e)}
             title="#{e.index} {e.summary}{isIncomplete(e) ? ' (incomplete)' : ''}"
             aria-label="Entry {e.index}: {e.summary}"
-            onclick={() => inspector.toggleWalEntry(e.index)}
+            onclick={() => view.toggle(e.index)}
           ></button>
         {/each}
       </div>
@@ -123,9 +119,9 @@
           class="row"
           class:incomplete={bad}
           class:commit={e.category === "commit"}
-          class:open={inspector.selectedWalEntry === e.index}
-          aria-expanded={inspector.selectedWalEntry === e.index}
-          onclick={() => inspector.toggleWalEntry(e.index)}
+          class:open={view.selected === e.index}
+          aria-expanded={view.selected === e.index}
+          onclick={() => view.toggle(e.index)}
         >
           <span class="muted mono">{e.index}</span>
           <span class="muted mono">{formatNumber(e.start)}</span>
@@ -138,8 +134,8 @@
           >
           <span class="r mono">{formatBytes(e.end - e.start)}</span>
         </button>
-        {#if inspector.selectedWalEntry === e.index}
-          <WalEntryDetail {wal} entry={e} />
+        {#if view.selected === e.index}
+          <WalEntryDetail {wal} entry={e} onclose={() => (view.selected = null)} />
         {/if}
       {/each}
       {#if listed.length < entries.length}
