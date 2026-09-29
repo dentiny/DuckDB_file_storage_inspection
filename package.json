@@ -19,7 +19,7 @@
     "screenshots": "npm run build && node scripts/screenshots.ts"
   },
   "engines": {
-    "node": ">=22"
+    "node": ">=22.18"
   },
   "dependencies": {
     "@duckdb/duckdb-wasm": "1.33.1-dev57.0"

@@ -13,6 +13,7 @@
     "resolveJsonModule": true,
     "skipLibCheck": true,
     "allowJs": false,
+    "allowImportingTsExtensions": true,
     "noEmit": true
   },
   "include": ["src/**/*.ts", "src/**/*.svelte", "scripts/**/*.ts", "server/**/*.ts", "*.config.ts"]

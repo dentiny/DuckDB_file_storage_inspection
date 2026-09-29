@@ -8,6 +8,8 @@ Type a path on this machine (`~/data/app.duckdb`), open or drop a file, or paste
 
 ## Usage
 
+You need Node 22.18 or newer.
+
 ```sh
 npm start                                   # http://localhost:5173, installs dependencies on first run
 npm start -- --port 8080                    # another port; PORT=8080 npm start works too
@@ -17,7 +19,7 @@ npm start -- ~/data/app.duckdb --no-open    # prints the link instead of opening
 
 `node scripts/start.ts` does the same without npm.
 
-Paths are served by a small route in the dev and preview servers (`server/local-files.ts`) that only serves files starting with DuckDB's magic bytes, plus the `.wal` next to such a file or a lone file that starts like a WAL. Files picked with **Open file** never leave the browser; pick the `.wal` together with the database to see it, since browsers can't see sibling files.
+Paths are served by a small route in the dev and preview servers (`server/local-files.ts`) that only serves files starting with DuckDB's magic bytes, plus the `.wal` next to such a file or a lone file that starts like a WAL. It answers only the app itself on this machine: requests from other machines (even with `--host`), with another Host (DNS rebinding) or from another site's page get a 403. Files picked with **Open file** never leave the browser; pick the `.wal` together with the database to see it, since browsers can't see sibling files.
 
 ## What it shows
 
@@ -53,6 +55,12 @@ A `.wal` can also be opened on its own, by its path or by picking only it; colum
 ### Damaged files
 
 A database cut off before its end (a crash while it grew, an interrupted copy) still shows its headers and block layout, with the missing blocks marked. DuckDB can't open such a file, so the summary says why tables aren't shown. [`examples/`](examples) has healthy and damaged databases and WALs to try this on: a database or a WAL on its own, a torn last commit, a torn entry header, a checksum mismatch, a truncated database, a torn database header and a bulk insert. Open one by path, e.g. `npm start -- examples/04_wal_torn_last_commit/store.duckdb`.
+
+## Compatibility
+
+- Checked against files written by DuckDB 1.5.5 (storage version 64), in Chromium, Firefox and WebKit.
+- DuckDB-Wasm is pinned to `1.33.1-dev57.0`, a prerelease: it is npm's `latest` tag and the only build that tracks DuckDB 1.5. Move to a stable release once one is published.
+- Local paths need `npm start` (the dev server). A static build of `dist/` still opens picked files and URLs.
 
 ## Not supported
 

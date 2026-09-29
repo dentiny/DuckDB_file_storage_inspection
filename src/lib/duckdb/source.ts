@@ -1,9 +1,5 @@
 import { BLOCKS_START } from "./header";
-
-/** Local paths are served by the dev and preview servers under this prefix (see `server/local-files.ts`). */
-export const LOCAL_PREFIX = "/@local";
-/** Header the local file server sets to the size of the database's `.wal`, or 0 when there is none. */
-export const WAL_HEADER = "x-duckdb-wal-size";
+import { LOCAL_PREFIX, WAL_HEADER } from "./localRoute";
 
 /** Where the database bytes come from, which decides how DuckDB-Wasm is told to open it. */
 export type Origin =

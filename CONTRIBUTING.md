@@ -4,7 +4,7 @@ Bug reports with the DuckDB version and, if you can share it, the database file 
 
 ## Setup
 
-You need Node 22 or newer. The DuckDB CLI is only needed to rebuild the sample database.
+You need Node 22.18 or newer, which runs the TypeScript scripts in `scripts/` directly. The DuckDB CLI is only needed to rebuild the sample and example databases.
 
 ```sh
 npm install

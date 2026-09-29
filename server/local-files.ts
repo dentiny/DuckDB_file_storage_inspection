@@ -4,7 +4,7 @@ import { homedir } from "node:os";
 import path from "node:path";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Connect, Plugin } from "vite";
-import { LOCAL_PREFIX, WAL_HEADER } from "../src/lib/duckdb/source";
+import { LOCAL_PREFIX, WAL_HEADER } from "../src/lib/duckdb/localRoute.ts";
 
 /** Resolves `~` and relative paths against the directory the server was started in. */
 function resolveLocalPath(raw: string, cwd = process.cwd()): string {
@@ -107,8 +107,29 @@ async function serveLocalFile(req: IncomingMessage, res: ServerResponse): Promis
   createReadStream(file, { start, end }).pipe(res);
 }
 
+const LOOPBACK = /^(127\.\d+\.\d+\.\d+|::1|::ffff:127\.\d+\.\d+\.\d+)$/;
+const LOCAL_HOST = /^(localhost|127\.\d+\.\d+\.\d+|\[::1\])(:\d+)?$/i;
+
+/**
+ * Whether the request comes from the app on this machine. The route reads files off this disk, so it stays
+ * unreachable from other machines even when the server is started with `--host`; checking Host stops DNS
+ * rebinding, and checking Origin stops other sites open in the same browser.
+ */
+function fromThisMachine(req: IncomingMessage): boolean {
+  if (!LOOPBACK.test(req.socket.remoteAddress ?? "") || !LOCAL_HOST.test(req.headers.host ?? "")) return false;
+  // Pages from other sites open in this machine's browser can send requests here too; only the app's own may.
+  const origin = req.headers.origin;
+  if (origin === undefined) return true;
+  try {
+    return new URL(origin).host === req.headers.host;
+  } catch {
+    return false;
+  }
+}
+
 const middleware: Connect.NextHandleFunction = (req, res, next) => {
   if (!req.url?.startsWith(`${LOCAL_PREFIX}?`)) return next();
+  if (!fromThisMachine(req)) return fail(res, 403, "local files are only served to this machine");
   serveLocalFile(req, res).catch((error: unknown) => fail(res, 500, String(error)));
 };
 
