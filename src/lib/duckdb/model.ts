@@ -1,4 +1,4 @@
-import type { Catalog, CatalogEntry, StorageRow, TableDef } from "./catalog";
+import type { Catalog, CatalogEntry, MetadataBlockInfo, StorageRow, TableDef } from "./catalog";
 import {
   activeHeader,
   BLOCK_HEADER_SIZE,
@@ -8,6 +8,7 @@ import {
   METADATA_BLOCK_COUNT,
   metadataSubBlockSize,
   type BlockUsage,
+  type Chain,
   type DatabaseHeader,
   type FileHeader,
 } from "./header";
@@ -112,7 +113,8 @@ export interface MetadataPiece extends Span {
   to: number;
 }
 export interface BlockPiece extends Span {
-  kind: "free" | "unknown";
+  /** `missing` is a block the header counts but the file ends before, e.g. after a crash or a partial copy. */
+  kind: "free" | "unknown" | "missing" | "unread";
   block: number;
 }
 export interface TailPiece extends Span {
@@ -147,6 +149,74 @@ export interface DuckDBModel {
   /** Compressed bytes per leaf column. */
   leafBytes: number[];
   walSize: number | null;
+  /** What the header says the file should span; more than `fileSize` when the file was cut off. */
+  expectedSize: number;
+  /** Why parts of the file can't be shown, e.g. it is cut off or DuckDB couldn't open it. */
+  problems: string[];
+  /** Whether DuckDB opened the file; without it there are no tables, and blocks can only be told apart by the free list. */
+  opened: boolean;
+  /** Per header slot, the metadata chains its catalog and free list pointers lead through. */
+  chains: HeaderChains[];
+}
+
+export interface HeaderChains {
+  catalog: Chain | null;
+  freeList: Chain | null;
+}
+
+export type BlockState = "data" | "metadata" | "free" | "unknown" | "unread" | "missing";
+
+export interface BlockInfo {
+  block: number;
+  state: BlockState;
+  /** Segments that point into the block, from the free list's shared-block counts or from placed segments. */
+  segments: number;
+  start: number;
+  end: number;
+}
+
+/** The block state each kind of piece gives its block; headers and file tail aren't in a block. */
+const STATE: Partial<Record<PieceKind, BlockState>> = {
+  segment: "data",
+  validity: "data",
+  overflow: "data",
+  metadata: "metadata",
+  metadataFree: "metadata",
+  free: "free",
+  unknown: "unknown",
+  unread: "unread",
+  missing: "missing",
+};
+/** A block holding several kinds of piece shows the one ranked highest, e.g. missing over data. */
+const RANK: Record<BlockState, number> = { missing: 5, metadata: 4, data: 3, free: 2, unread: 1, unknown: 0 };
+
+/** What every block holds, for the allocation grid. A block cut off by the end of the file counts as missing. */
+export function blockStates(model: DuckDBModel): BlockInfo[] {
+  const blocks: BlockInfo[] = Array.from({ length: model.header.blockCount }, (_, block) => {
+    const start = blockStart(model.header, block);
+    return { block, state: "unknown", segments: 0, start, end: start + model.header.blockAllocSize };
+  });
+  for (const p of model.pieces) {
+    const state = STATE[p.kind];
+    const info = "block" in p ? blocks[p.block] : undefined;
+    if (!state || !info) continue;
+    if (RANK[state] >= RANK[info.state]) info.state = state;
+    if (p.kind === "segment" || p.kind === "validity") info.segments = Math.max(info.segments, p.shared);
+  }
+  for (const [block, uses] of model.usage?.multiUse ?? []) {
+    const info = blocks[block];
+    if (info) info.segments = uses;
+  }
+  return blocks;
+}
+
+/** Where pieces are collected while the model is built, and which blocks they claim. */
+interface Layout {
+  header: DatabaseHeader;
+  pieces: Piece[];
+  /** Segments per block, sized once every table is placed. */
+  inBlock: Map<number, SegmentPiece[]>;
+  claimed: Set<number>;
 }
 
 export function buildModel(input: {
@@ -159,28 +229,16 @@ export function buildModel(input: {
   walSize: number | null;
   /** Payload bytes in use per block, from `measureBlocks`. */
   used?: Map<number, number>;
+  problems?: string[];
+  opened?: boolean;
+  chains?: HeaderChains[];
 }): DuckDBModel {
-  const { name, fileSize, file, usage, catalog } = input;
+  const { fileSize, file, usage, catalog } = input;
   const header = activeHeader(file);
-  const payload = header.blockAllocSize - BLOCK_HEADER_SIZE;
-  const pieces: Piece[] = [{ kind: "mainHeader", start: 0, end: HEADER_SIZE }];
-  file.headers.forEach((h, slot) => {
-    pieces.push({
-      kind: "dbHeader",
-      start: h.offset,
-      end: h.offset + HEADER_SIZE,
-      slot: slot as 0 | 1,
-      header: h,
-      active: slot === file.active,
-    });
-  });
+  const layout: Layout = { header, pieces: headerPieces(file), inBlock: new Map(), claimed: new Set() };
 
-  const singleMain = catalog.tables.length === 1 && catalog.tables[0]?.schema === "main";
   const leaves: Leaf[] = [];
-  /** Segment offsets per block, sized once every table is placed. */
-  const inBlock = new Map<number, SegmentPiece[]>();
-  const claimed = new Set<number>();
-
+  const singleMain = catalog.tables.length === 1 && catalog.tables[0]?.schema === "main";
   const tables = catalog.tables.map((def, index): TableInfo => {
     const qualified = `${def.schema}.${def.name}`;
     const tableLeaves = def.columns.map((c, column) => {
@@ -193,144 +251,15 @@ export function buildModel(input: {
       });
       return leaves.length - 1;
     });
-    const byGroup = new Map<number, StorageRow[]>();
-    for (const row of catalog.storage[index] ?? []) {
-      const list = byGroup.get(row.rowGroup) ?? [];
-      list.push(row);
-      byGroup.set(row.rowGroup, list);
-    }
-
-    let firstRow = 0;
-    const rowGroups = [...byGroup.keys()]
-      .sort((a, b) => a - b)
-      .map((rg): RowGroupInfo => {
-        const rows = byGroup.get(rg) ?? [];
-        const numRows = Math.max(
-          0,
-          ...def.columns.map((_, column) =>
-            rows.filter((r) => r.columnId === column && r.path.length === 1).reduce((sum, r) => sum + r.count, 0),
-          ),
-        );
-        const group: RowGroupInfo = { table: index, rg, firstRow, numRows, chunks: [], bytes: 0, blocks: [] };
-        group.chunks = def.columns.map((c, column): Chunk => {
-          const chunk: Chunk = {
-            table: index,
-            rg,
-            leaf: tableLeaves[column] ?? -1,
-            segments: [],
-            parts: [],
-            bytes: 0,
-            bounds: null,
-            hasNull: null,
-            compressions: [],
-          };
-          const own = rows
-            .filter((r) => r.columnId === column)
-            .sort((a, b) => a.path.length - b.path.length || comparePaths(a.path, b.path) || a.start - b.start);
-          for (const row of own) {
-            const validity = row.segmentType === "VALIDITY";
-            const segment: Segment = { row, stats: parseStats(row.stats, c.type), validity, piece: null };
-            chunk.segments.push(segment);
-            if (row.blockId < 0 || !row.persistent) continue;
-            const start = blockStart(header, row.blockId) + BLOCK_HEADER_SIZE + row.blockOffset;
-            const piece: SegmentPiece = {
-              kind: validity ? "validity" : "segment",
-              start,
-              end: start,
-              chunk,
-              segment,
-              block: row.blockId,
-              firstRow: firstRow + row.start,
-              extent: "next",
-              shared: 1,
-            };
-            segment.piece = piece;
-            const list = inBlock.get(row.blockId) ?? [];
-            list.push(piece);
-            inBlock.set(row.blockId, list);
-            claimed.add(row.blockId);
-            chunk.parts.push(piece);
-            for (const block of row.additionalBlocks) {
-              const at = blockStart(header, block);
-              const overflow: OverflowPiece = {
-                kind: "overflow",
-                start: at + BLOCK_HEADER_SIZE,
-                end: at + header.blockAllocSize,
-                chunk,
-                segment,
-                block,
-              };
-              claimed.add(block);
-              chunk.parts.push(overflow);
-              pieces.push(overflow);
-            }
-          }
-          const values = chunk.segments.filter((s) => s.row.path.length === 1 && !s.validity);
-          chunk.bounds = mergeBounds(values.map((s) => s.stats.bounds));
-          const nulls = chunk.segments.map((s) => s.stats.hasNull).filter((n) => n !== null);
-          chunk.hasNull = nulls.length ? nulls.some(Boolean) : null;
-          chunk.compressions = [...new Set(chunk.segments.filter((s) => !s.validity).map((s) => s.row.compression))];
-          return chunk;
-        });
-        firstRow += numRows;
-        return group;
-      });
+    const rowGroups = placeRowGroups(def, index, tableLeaves, catalog.storage[index] ?? [], layout);
     return { index, def, qualified, leaves: tableLeaves, rowGroups, bytes: 0 };
   });
-
-  for (const [block, list] of inBlock) {
-    list.sort((a, b) => a.start - b.start);
-    const payloadStart = blockStart(header, block) + BLOCK_HEADER_SIZE;
-    const end = payloadStart + payload;
-    const used = input.used?.get(block);
-    list.forEach((piece, i) => {
-      const next = list[i + 1];
-      piece.shared = list.length;
-      pieces.push(piece);
-      if (next) {
-        piece.end = next.start;
-      } else if (used === undefined) {
-        piece.end = end;
-        piece.extent = "blockEnd";
-      } else {
-        piece.end = Math.max(piece.start + 1, payloadStart + used);
-        piece.extent = "measured";
-        if (piece.end < end) pieces.push({ kind: "slack", start: piece.end, end, block });
-      }
-    });
-  }
-
-  const metadata: number[] = [];
-  const subSize = metadataSubBlockSize(header);
-  for (const { block, freeSubBlocks } of catalog.metadata) {
-    metadata.push(block);
-    claimed.add(block);
-    const free = new Set(freeSubBlocks);
-    const base = blockStart(header, block) + BLOCK_HEADER_SIZE;
-    let from = 0;
-    for (let sub = 1; sub <= METADATA_BLOCK_COUNT; sub++) {
-      if (sub < METADATA_BLOCK_COUNT && free.has(sub) === free.has(from)) continue;
-      const kind = free.has(from) ? "metadataFree" : "metadata";
-      const end = sub === METADATA_BLOCK_COUNT ? base + payload : base + sub * subSize;
-      pieces.push({ kind, start: base + from * subSize, end, block, from, to: sub - 1 });
-      from = sub;
-    }
-  }
-
-  const freeBlocks = usage?.free.filter((b) => !claimed.has(b)) ?? [];
-  const free = new Set(freeBlocks);
-  const unknown: number[] = [];
-  for (let block = 0; block < header.blockCount; block++) {
-    if (claimed.has(block)) continue;
-    const start = blockStart(header, block);
-    const kind = free.has(block) ? "free" : "unknown";
-    if (kind === "unknown") unknown.push(block);
-    pieces.push({ kind, start, end: start + header.blockAllocSize, block });
-  }
+  sizeSegments(layout, input.used);
+  const metadata = placeMetadata(catalog.metadata, layout);
+  const { free, unknown } = placeBlocks(layout, fileSize, usage, input.opened ?? true);
   const blocksEnd = blockStart(header, header.blockCount);
-  if (fileSize > blocksEnd) pieces.push({ kind: "tail", start: blocksEnd, end: fileSize });
+  layout.pieces.sort((a, b) => a.start - b.start);
 
-  pieces.sort((a, b) => a.start - b.start);
   for (const table of tables) {
     for (const group of table.rowGroups) {
       const blocks = new Set<number>();
@@ -348,7 +277,7 @@ export function buildModel(input: {
   );
 
   return {
-    name,
+    name: input.name,
     fileSize,
     file,
     header,
@@ -358,12 +287,203 @@ export function buildModel(input: {
     views: catalog.views,
     indexes: catalog.indexes,
     sequences: catalog.sequences,
-    pieces,
-    blocks: { total: header.blockCount, free: freeBlocks, metadata, unknown },
+    pieces: layout.pieces,
+    blocks: { total: header.blockCount, free, metadata, unknown },
     usage,
     leafBytes,
     walSize: input.walSize,
+    expectedSize: Math.max(fileSize, blocksEnd),
+    problems: input.problems ?? [],
+    opened: input.opened ?? true,
+    chains: input.chains ?? [],
   };
+}
+
+function headerPieces(file: FileHeader): Piece[] {
+  return [
+    { kind: "mainHeader", start: 0, end: HEADER_SIZE },
+    ...file.headers.map((h, slot): DbHeaderPiece => ({
+      kind: "dbHeader",
+      start: h.offset,
+      end: h.offset + HEADER_SIZE,
+      slot: slot as 0 | 1,
+      header: h,
+      active: slot === file.active,
+    })),
+  ];
+}
+
+/** A table's row groups, each column's segments placed at their block offsets; their ends come later. */
+function placeRowGroups(
+  def: TableDef,
+  table: number,
+  leaves: number[],
+  storage: StorageRow[],
+  layout: Layout,
+): RowGroupInfo[] {
+  const { header } = layout;
+  const byGroup = new Map<number, StorageRow[]>();
+  for (const row of storage) byGroup.set(row.rowGroup, [...(byGroup.get(row.rowGroup) ?? []), row]);
+
+  let firstRow = 0;
+  return [...byGroup.keys()]
+    .sort((a, b) => a - b)
+    .map((rg): RowGroupInfo => {
+      const rows = byGroup.get(rg) ?? [];
+      const rowsIn = (column: number) =>
+        rows.filter((r) => r.columnId === column && r.path.length === 1).reduce((sum, r) => sum + r.count, 0);
+      const numRows = Math.max(0, ...def.columns.map((_, column) => rowsIn(column)));
+      const chunks = def.columns.map((c, column): Chunk => {
+        const chunk: Chunk = {
+          table,
+          rg,
+          leaf: leaves[column] ?? -1,
+          segments: [],
+          parts: [],
+          bytes: 0,
+          bounds: null,
+          hasNull: null,
+          compressions: [],
+        };
+        const own = rows
+          .filter((r) => r.columnId === column)
+          .sort((a, b) => a.path.length - b.path.length || comparePaths(a.path, b.path) || a.start - b.start);
+        for (const row of own) {
+          const validity = row.segmentType === "VALIDITY";
+          const segment: Segment = { row, stats: parseStats(row.stats, c.type), validity, piece: null };
+          chunk.segments.push(segment);
+          if (row.blockId < 0 || !row.persistent) continue;
+          const start = blockStart(header, row.blockId) + BLOCK_HEADER_SIZE + row.blockOffset;
+          const piece: SegmentPiece = {
+            kind: validity ? "validity" : "segment",
+            start,
+            end: start,
+            chunk,
+            segment,
+            block: row.blockId,
+            firstRow: firstRow + row.start,
+            extent: "next",
+            shared: 1,
+          };
+          segment.piece = piece;
+          layout.inBlock.set(row.blockId, [...(layout.inBlock.get(row.blockId) ?? []), piece]);
+          layout.claimed.add(row.blockId);
+          chunk.parts.push(piece);
+          for (const block of row.additionalBlocks) {
+            const at = blockStart(header, block);
+            const overflow: OverflowPiece = {
+              kind: "overflow",
+              start: at + BLOCK_HEADER_SIZE,
+              end: at + header.blockAllocSize,
+              chunk,
+              segment,
+              block,
+            };
+            layout.claimed.add(block);
+            chunk.parts.push(overflow);
+            layout.pieces.push(overflow);
+          }
+        }
+        const values = chunk.segments.filter((s) => s.row.path.length === 1 && !s.validity);
+        chunk.bounds = mergeBounds(values.map((s) => s.stats.bounds));
+        const nulls = chunk.segments.map((s) => s.stats.hasNull).filter((n) => n !== null);
+        chunk.hasNull = nulls.length ? nulls.some(Boolean) : null;
+        chunk.compressions = [...new Set(chunk.segments.filter((s) => !s.validity).map((s) => s.row.compression))];
+        return chunk;
+      });
+      const group: RowGroupInfo = { table, rg, firstRow, numRows, chunks, bytes: 0, blocks: [] };
+      firstRow += numRows;
+      return group;
+    });
+}
+
+/**
+ * A segment ends where the next one in its block starts. The last one ends at the block's last non-zero byte
+ * when that was measured, leaving the zeros after it as unused space; otherwise at the block's end.
+ */
+function sizeSegments(layout: Layout, used: Map<number, number> | undefined): void {
+  const { header, pieces } = layout;
+  const payload = header.blockAllocSize - BLOCK_HEADER_SIZE;
+  for (const [block, list] of layout.inBlock) {
+    list.sort((a, b) => a.start - b.start);
+    const payloadStart = blockStart(header, block) + BLOCK_HEADER_SIZE;
+    const end = payloadStart + payload;
+    const inUse = used?.get(block);
+    list.forEach((piece, i) => {
+      const next = list[i + 1];
+      piece.shared = list.length;
+      pieces.push(piece);
+      if (next) {
+        piece.end = next.start;
+      } else if (inUse === undefined) {
+        piece.end = end;
+        piece.extent = "blockEnd";
+      } else {
+        piece.end = Math.max(piece.start + 1, payloadStart + inUse);
+        piece.extent = "measured";
+        if (piece.end < end) pieces.push({ kind: "slack", start: piece.end, end, block });
+      }
+    });
+  }
+}
+
+/** Metadata blocks as runs of used and free 4 KB sub-blocks. */
+function placeMetadata(blocks: MetadataBlockInfo[], layout: Layout): number[] {
+  const { header, pieces } = layout;
+  const payload = header.blockAllocSize - BLOCK_HEADER_SIZE;
+  const subSize = metadataSubBlockSize(header);
+  for (const { block, freeSubBlocks } of blocks) {
+    layout.claimed.add(block);
+    const free = new Set(freeSubBlocks);
+    const base = blockStart(header, block) + BLOCK_HEADER_SIZE;
+    let from = 0;
+    for (let sub = 1; sub <= METADATA_BLOCK_COUNT; sub++) {
+      if (sub < METADATA_BLOCK_COUNT && free.has(sub) === free.has(from)) continue;
+      const kind = free.has(from) ? "metadataFree" : "metadata";
+      const end = sub === METADATA_BLOCK_COUNT ? base + payload : base + sub * subSize;
+      pieces.push({ kind, start: base + from * subSize, end, block, from, to: sub - 1 });
+      from = sub;
+    }
+  }
+  return blocks.map((b) => b.block);
+}
+
+/**
+ * Every block no segment or metadata claims: free when the free list says so, otherwise in use for something else
+ * (or unread, when DuckDB couldn't open the file). Past a cut-off end, blocks are missing.
+ */
+function placeBlocks(
+  layout: Layout,
+  fileSize: number,
+  usage: BlockUsage | null,
+  opened: boolean,
+): { free: number[]; unknown: number[] } {
+  const { header, claimed } = layout;
+  const free = usage?.free.filter((b) => !claimed.has(b)) ?? [];
+  const isFree = new Set(free);
+  const unknown: number[] = [];
+  for (let block = 0; block < header.blockCount; block++) {
+    const start = blockStart(header, block);
+    if (claimed.has(block) || start >= fileSize) continue;
+    const kind = isFree.has(block) ? "free" : opened ? "unknown" : "unread";
+    if (kind === "unknown") unknown.push(block);
+    layout.pieces.push({ kind, start, end: start + header.blockAllocSize, block });
+  }
+
+  const blocksEnd = blockStart(header, header.blockCount);
+  if (fileSize > blocksEnd) layout.pieces.push({ kind: "tail", start: blocksEnd, end: fileSize });
+  if (fileSize < blocksEnd) {
+    // A file cut short keeps the pieces it still holds; the blocks after its end are shown as missing.
+    const kept = layout.pieces.filter((p) => p.start < fileSize);
+    for (const p of kept) p.end = Math.min(p.end, fileSize);
+    const first = Math.max(0, Math.floor((fileSize - BLOCKS_START) / header.blockAllocSize));
+    for (let block = first; block < header.blockCount; block++) {
+      const start = blockStart(header, block);
+      kept.push({ kind: "missing", start: Math.max(start, fileSize), end: start + header.blockAllocSize, block });
+    }
+    layout.pieces.splice(0, layout.pieces.length, ...kept);
+  }
+  return { free, unknown };
 }
 
 function comparePaths(a: number[], b: number[]): number {
@@ -384,11 +504,6 @@ export function chunkAt(group: RowGroupInfo, column: number): Chunk {
   const found = group.chunks[column];
   if (!found) throw new Error(`row group ${group.rg} has no column ${column}`);
   return found;
-}
-
-/** Bytes from the first block on, where the tables and metadata live. */
-export function blocksRegion(model: DuckDBModel): { from: number; to: number } {
-  return { from: BLOCKS_START, to: Math.max(model.fileSize, BLOCKS_START + 1) };
 }
 
 /** A path element as DuckDB's column tree would name it: validity, or the nth child. */

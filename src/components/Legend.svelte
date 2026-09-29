@@ -13,9 +13,9 @@
   const shown = model.leaves.map((leaf, i) => ({ leaf, i })).slice(0, MAX_COLUMNS);
   const hidden = model.leaves.length - shown.length;
   const present = new Set(model.pieces.map((p) => p.kind));
-  const keys = (["validity", "overflow", "slack", "metadata", "free", "unknown"] as PieceKind[]).filter((k) =>
-    present.has(k),
-  );
+  const keys = (
+    ["validity", "overflow", "slack", "metadata", "free", "unknown", "unread", "missing"] as PieceKind[]
+  ).filter((k) => present.has(k));
 </script>
 
 <div class="legend">

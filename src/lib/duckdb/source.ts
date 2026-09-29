@@ -1,9 +1,5 @@
 import { BLOCKS_START } from "./header";
-
-/** Local paths are served by the dev and preview servers under this prefix (see `server/local-files.ts`). */
-export const LOCAL_PREFIX = "/@local";
-/** Header the local file server sets to the size of the database's `.wal`, or 0 when there is none. */
-export const WAL_HEADER = "x-duckdb-wal-size";
+import { LOCAL_PREFIX, WAL_HEADER } from "./localRoute";
 
 /** Where the database bytes come from, which decides how DuckDB-Wasm is told to open it. */
 export type Origin =
@@ -34,9 +30,12 @@ export interface Source {
 }
 
 /** Whether the input names a file on this machine rather than a URL. */
-export function isLocalPath(input: string): boolean {
-  const s = input.trim();
-  return s.startsWith("/") || s.startsWith("~/") || s.startsWith("./") || s.startsWith("../") || /^file:\/\//.test(s);
+const isLocalPath = (input: string) => /^(\/|~\/|\.\.?\/|file:\/\/)/.test(input.trim());
+
+/** The full size from a 206 response's Content-Range, or `fallback` when the server sent the whole file. */
+function totalSize(res: Response, fallback: number): number {
+  const total = res.headers.get("content-range")?.match(/\/(\d+)$/);
+  return res.status === 206 && total ? Number(total[1]) : fallback;
 }
 
 /**
@@ -51,7 +50,7 @@ export function resolveInput(input: string, base: string): string {
 }
 
 /** Where the database's write-ahead log would be: the same URL, or local path, with `.wal` appended. */
-export function walUrl(url: string): string {
+function walUrl(url: string): string {
   const u = new URL(url);
   const path = u.searchParams.get("path");
   if (u.pathname === LOCAL_PREFIX && path) u.searchParams.set("path", `${path}.wal`);
@@ -64,22 +63,22 @@ function looksLikeWal(bytes: Uint8Array): boolean {
   return bytes.length === 0 || (bytes[0] === 0x64 && bytes[1] === 0x00);
 }
 
-async function fetchWal(url: string, name: string): Promise<WalBytes | null> {
+/** Reads a write-ahead log at `url`, or returns null when there is none there. */
+export async function fetchWal(url: string, name: string): Promise<WalBytes | null> {
   try {
-    const res = await fetch(walUrl(url), { headers: { Range: `bytes=0-${MAX_WAL_BYTES - 1}` } });
+    const res = await fetch(url, { headers: { Range: `bytes=0-${MAX_WAL_BYTES - 1}` } });
     if (!res.ok) return null;
     const bytes = new Uint8Array(await res.arrayBuffer());
     // Static hosts often answer a missing file with their index page.
     if (res.headers.get("content-type")?.includes("text/html") || !looksLikeWal(bytes)) return null;
-    const total = res.headers.get("content-range")?.match(/\/(\d+)$/);
-    return { name: `${name}.wal`, bytes, size: res.status === 206 && total ? Number(total[1]) : bytes.length };
+    return { name, bytes, size: totalSize(res, bytes.length) };
   } catch {
     return null;
   }
 }
 
-async function fileWal(file: File | undefined): Promise<WalBytes | null> {
-  if (!file) return null;
+/** A write-ahead log picked in the browser, read up to MAX_WAL_BYTES. */
+export async function walFromFile(file: File): Promise<WalBytes> {
   const bytes = new Uint8Array(await file.slice(0, MAX_WAL_BYTES).arrayBuffer());
   return { name: file.name, bytes, size: file.size };
 }
@@ -98,31 +97,18 @@ export async function urlSource(url: string, name = nameOf(url)): Promise<Source
   const read = async (start: number, end: number) => (await fetchRange(start, end)).arrayBuffer();
   const res = await fetchRange(0, BLOCKS_START);
   const head = await res.arrayBuffer();
-  const range = res.headers.get("content-range")?.match(/\/(\d+)$/);
-  // A 200 means the server ignored Range and sent the whole file.
-  const byteLength = res.status === 206 && range ? Number(range[1]) : head.byteLength;
-  if (res.status !== 206 && head.byteLength > BLOCKS_START) {
-    const whole = new Uint8Array(head);
-    return {
-      name,
-      byteLength,
-      head: head.slice(0, BLOCKS_START),
-      walSize: null,
-      origin: { kind: "buffer", bytes: whole },
-      read: async (start, end) => head.slice(start, end),
-      readWal: () => fetchWal(url, name),
-    };
-  }
+  // A 200 means the server ignored Range and sent the whole file, which is then read from memory.
+  const whole = res.status !== 206;
   const wal = res.headers.get(WAL_HEADER);
   const walSize = wal === null ? null : Number(wal);
   return {
     name,
-    byteLength,
-    head,
+    byteLength: totalSize(res, head.byteLength),
+    head: head.slice(0, BLOCKS_START),
     walSize,
-    origin: { kind: "url", url },
-    read,
-    readWal: async () => (walSize === 0 ? null : fetchWal(url, name)),
+    origin: whole ? { kind: "buffer", bytes: new Uint8Array(head) } : { kind: "url", url },
+    read: whole ? async (start, end) => head.slice(start, end) : read,
+    readWal: async () => (walSize === 0 ? null : fetchWal(walUrl(url), `${name}.wal`)),
   };
 }
 
@@ -136,6 +122,6 @@ export async function fileSource(file: File, wal?: File): Promise<Source> {
     walSize: wal ? wal.size : null,
     origin: { kind: "file", file },
     read,
-    readWal: () => fileWal(wal),
+    readWal: async () => (wal ? walFromFile(wal) : null),
   };
 }

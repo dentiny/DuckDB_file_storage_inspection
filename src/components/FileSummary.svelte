@@ -38,7 +38,7 @@
     const { source, selectedRg, selectedLeaf } = inspector;
     if (source === null) return;
     const col = selectedLeaf === null ? null : (model.leaves[selectedLeaf]?.name ?? null);
-    const query = toQuery({ db: source, table: inspector.table.qualified, rg: selectedRg, col });
+    const query = toQuery({ db: source, table: inspector.table?.qualified ?? null, rg: selectedRg, col });
     await navigator.clipboard.writeText(shareUrl(query, location));
     copied = true;
     setTimeout(() => (copied = false), 1500);
@@ -53,6 +53,11 @@
       <button type="button" onclick={copyLink}>{copied ? "Copied" : "Copy link"}</button>
     {/if}
   </header>
+  {#if model.problems.length}
+    <ul class="problems">
+      {#each model.problems as problem (problem)}<li>{problem}</li>{/each}
+    </ul>
+  {/if}
   <dl>
     {#each stats as stat (stat.label)}
       <div>
@@ -67,7 +72,7 @@
       <dd class="note">storage version {file.storageVersion} · checkpoint {formatNumber(header.iteration)}</dd>
     </div>
   </dl>
-  <Efficiency />
+  {#if model.opened}<Efficiency />{/if}
 </section>
 
 <style>
@@ -115,6 +120,19 @@
 
   button:hover {
     border-color: #d1d5db;
+  }
+
+  .problems {
+    margin: 0;
+    padding: 10px 16px 10px 32px;
+    border-bottom: 1px solid var(--line);
+    background: #f3f4f6;
+    font-size: 12.5px;
+    color: var(--text-2);
+  }
+
+  .problems li + li {
+    margin-top: 4px;
   }
 
   dl {

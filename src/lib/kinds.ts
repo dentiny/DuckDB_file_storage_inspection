@@ -43,6 +43,16 @@ export const KINDS: Record<PieceKind, KindInfo> = {
     color: "#f9a8d4",
     what: "In use but not a table segment or metadata: usually ART index storage for a PRIMARY KEY, UNIQUE or CREATE INDEX.",
   },
+  missing: {
+    label: "Missing block",
+    color: "#e5e7eb",
+    what: "The header counts this block, but the file ends before it: the file was cut off, e.g. by a crash while it grew or an incomplete copy.",
+  },
+  unread: {
+    label: "Unread block",
+    color: "#cbd5e1",
+    what: "DuckDB couldn't open the file, so what this block holds isn't known; it isn't on the free list.",
+  },
   slack: {
     label: "Unused space",
     color: "#e9ebee",
@@ -50,17 +60,17 @@ export const KINDS: Record<PieceKind, KindInfo> = {
   },
   mainHeader: {
     label: "Main header",
-    color: "#111827",
+    color: "#94a3b8",
     what: 'Checksum, the "DUCK" magic bytes, the storage format version, and the DuckDB version that created the file.',
   },
   dbHeader: {
     label: "Database header",
-    color: "#1f2937",
+    color: "#a5b4fc",
     what: "Points to the metadata and the free list. There are two, and each checkpoint overwrites the older one, so a crash mid-write leaves the other intact.",
   },
   tail: {
     label: "Past the last block",
     color: "#f3f4f6",
-    what: "Bytes after the last block the header counts, left when the file wasn't truncated.",
+    what: "Bytes after the last block the header counts: left when the file wasn't truncated, or blocks a large insert wrote that only the WAL points to until the next checkpoint.",
   },
 };

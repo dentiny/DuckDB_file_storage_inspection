@@ -4,7 +4,7 @@ Bug reports with the DuckDB version and, if you can share it, the database file 
 
 ## Setup
 
-You need Node 22 or newer. The DuckDB CLI is only needed to rebuild the sample database.
+You need Node 22.18 or newer, which runs the TypeScript scripts in `scripts/` directly. The DuckDB CLI is only needed to rebuild the sample and example databases.
 
 ```sh
 npm install
@@ -21,22 +21,26 @@ npm run verify       # lint, type-check, build
 
 ## Where things live
 
-| Path                          | What it does                                                                                                               |
-| ----------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
-| `src/lib/duckdb/header.ts`    | Parses the main and database headers and walks the free list through metadata sub-blocks. Start here for file-format bugs. |
-| `src/lib/duckdb/catalog.ts`   | The SQL run against the attached database: tables, columns, `pragma_storage_info`, `pragma_metadata_info`, views, indexes. |
-| `src/lib/duckdb/extent.ts`    | Finds where each block's last segment ends by scanning back from the block's end.                                          |
-| `src/lib/duckdb/model.ts`     | Turns all of the above into byte ranges ("pieces") per segment, overflow, metadata, free, index and unused block space.    |
-| `src/lib/duckdb/wal.ts`       | Reads the write-ahead log: frames, checksums, commits, and each entry's payload in DuckDB's binary serialization format.   |
-| `src/lib/duckdb/wasm.ts`      | DuckDB-Wasm in a worker.                                                                                                   |
-| `src/lib/duckdb/source.ts`    | Reading from a picked file, a URL, or a local path via `server/local-files.ts`.                                            |
-| `src/lib/inspector.svelte.ts` | The loaded file plus the user's selection (table, row group, column, popover). Components read it from context.            |
-| `src/lib/popover.ts`          | What the popover says about each kind of byte range.                                                                       |
-| `src/components/`             | One Svelte 5 component per section of the page.                                                                            |
+| Path                               | What it does                                                                                                               |
+| ---------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| `src/lib/duckdb/header.ts`         | Parses the main and database headers and walks the free list through metadata sub-blocks. Start here for file-format bugs. |
+| `src/lib/duckdb/catalog.ts`        | The SQL run against the attached database: tables, columns, `pragma_storage_info`, `pragma_metadata_info`, views, indexes. |
+| `src/lib/duckdb/extent.ts`         | Finds where each block's last segment ends by scanning back from the block's end.                                          |
+| `src/lib/duckdb/model.ts`          | Turns all of the above into byte ranges ("pieces") per segment, overflow, metadata, free, index and unused block space.    |
+| `src/lib/duckdb/wal.ts`            | Splits the write-ahead log into entries: frames, checksums, commits, and which entries are incomplete.                     |
+| `src/lib/duckdb/walEntries.ts`     | Decodes each kind of WAL entry: CREATE/ALTER/DROP rebuilt as SQL, inserted, updated and deleted rows.                      |
+| `src/lib/duckdb/serialization/`    | DuckDB's binary serialization format: the reader, logical types, values and vectors, expressions.                          |
+| `src/components/Allocation.svelte` | The block allocation card: both database headers, where their pointers lead, and every block by state.                     |
+| `src/lib/duckdb/wasm.ts`           | DuckDB-Wasm in a worker.                                                                                                   |
+| `src/lib/duckdb/source.ts`         | Reading from a picked file, a URL, or a local path via `server/local-files.ts`.                                            |
+| `src/lib/inspector.svelte.ts`      | The loaded file plus the user's selection (table, row group, column, popover). Components read it from context.            |
+| `src/lib/popover.ts`               | What the popover says about each kind of byte range.                                                                       |
+| `src/components/`                  | One Svelte 5 component per section of the page.                                                                            |
+| `examples/`                        | Healthy and damaged databases and WALs, each with a README; written by `scripts/make-examples.ts`.                         |
 
 ## Conventions
 
 - Svelte 5 runes (`$state`, `$derived`, `$props`) only.
 - File-format logic goes in `src/lib/duckdb/` as plain functions, not in components.
-- The sample databases are generated by `scripts/make-sample.sh` and `scripts/make-wal-sample.sh`, so they can be rebuilt instead of hand-edited.
+- The sample and example databases are generated by `scripts/make-sample.sh` and `scripts/make-examples.ts`, so they can be rebuilt instead of hand-edited. The examples in `examples/` double as test data: after changing a decoder, open each one and check it still shows what its README says.
 - WAL field ids follow DuckDB's `src/storage/write_ahead_log.cpp` and `src/storage/serialization/*.cpp`. When DuckDB adds a structure the decoder doesn't know, it shows what it decoded and says where it stopped instead of failing.

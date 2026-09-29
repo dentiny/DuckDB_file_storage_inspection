@@ -61,8 +61,12 @@ export function describePiece(p: Piece, model: DuckDBModel): PopoverContent {
     case "slack":
       rows.push(["Block", String(p.block)]);
       break;
+    case "missing":
+      rows.push(["Block", String(p.block)], ["File ends", `at byte ${formatNumber(model.fileSize)}`]);
+      break;
     case "free":
     case "unknown":
+    case "unread":
       rows.push(["Block", String(p.block)]);
       if (p.kind === "unknown" && model.indexes.length)
         rows.push(["Indexes", model.indexes.map((i) => i.name).join(", ")]);

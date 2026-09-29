@@ -42,7 +42,7 @@ export function parseStats(stats: string, type: string): SegmentStats {
   };
 }
 
-export function compare(a: StatValue, b: StatValue): number {
+function compare(a: StatValue, b: StatValue): number {
   if (a instanceof Date && b instanceof Date) return a.getTime() - b.getTime();
   if (typeof a === "number" && typeof b === "number") return a < b ? -1 : a > b ? 1 : 0;
   const x = String(a);
@@ -60,7 +60,7 @@ export function mergeBounds(all: (Bounds | null)[]): Bounds | null {
   }));
 }
 
-export type Order = "single" | "missing" | "constant" | "sorted" | "overlapping";
+type Order = "single" | "missing" | "constant" | "sorted" | "overlapping";
 
 /** How a column's min/max ranges line up across row groups, which decides whether zonemaps can skip any. */
 export function orderOf(bounds: (Bounds | null)[]): Order {

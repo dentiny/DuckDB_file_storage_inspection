@@ -16,5 +16,7 @@ export function pieceColor(p: Piece, selectedLeaf: number | null): string {
   if (p.kind === "segment" || p.kind === "validity" || p.kind === "overflow") {
     return leafColor(p.chunk.leaf, selectedLeaf, p.kind !== "segment");
   }
+  // The older of the two database headers is the one the next checkpoint overwrites.
+  if (p.kind === "dbHeader" && !p.active) return "#dde3fb";
   return KINDS[p.kind].color;
 }

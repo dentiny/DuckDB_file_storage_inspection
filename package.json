@@ -14,11 +14,12 @@
     "format": "prettier --write . && eslint --fix .",
     "verify": "npm run lint && npm run check && npm run build",
     "start": "node scripts/start.ts",
-    "sample": "./scripts/make-sample.sh && ./scripts/make-wal-sample.sh",
+    "sample": "./scripts/make-sample.sh",
+    "examples": "node scripts/make-examples.ts",
     "screenshots": "npm run build && node scripts/screenshots.ts"
   },
   "engines": {
-    "node": ">=22"
+    "node": ">=22.18"
   },
   "dependencies": {
     "@duckdb/duckdb-wasm": "1.33.1-dev57.0"

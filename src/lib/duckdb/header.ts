@@ -1,3 +1,5 @@
+import { checksum } from "./checksum";
+
 /** The main header and the two database headers each take one 4 KB slot at the start of the file. */
 export const HEADER_SIZE = 4096;
 /** Blocks start after the three header slots. */
@@ -10,6 +12,8 @@ const INVALID_BLOCK = -1;
 const ENCRYPTED_FLAG = 1n;
 /** Sub-blocks to follow before giving up on a free list, so a corrupt pointer can't loop forever. */
 const MAX_FREE_LIST_SUB_BLOCKS = 4096;
+/** Sub-blocks of a metadata chain to list; the catalog root is usually a handful. */
+const MAX_CHAIN = 256;
 
 /** A pointer into a metadata block: block id in the low 56 bits, sub-block index in the high 8. */
 export interface MetaPointer {
@@ -21,6 +25,8 @@ export interface DatabaseHeader {
   /** Byte offset of this header slot. */
   offset: number;
   checksum: bigint;
+  /** Whether the stored checksum matches the slot; a mismatch means the header was torn mid-write or corrupted. */
+  checksumOk: boolean;
   /** Bumped on every checkpoint; the header with the higher iteration is the active one. */
   iteration: number;
   metaBlock: MetaPointer | null;
@@ -33,6 +39,7 @@ export interface DatabaseHeader {
 
 export interface FileHeader {
   checksum: bigint;
+  checksumOk: boolean;
   storageVersion: number;
   flags: bigint[];
   encrypted: boolean;
@@ -53,7 +60,7 @@ export interface BlockUsage {
 
 export class NotDuckDBError extends Error {}
 
-export function metaPointer(raw: bigint): MetaPointer | null {
+function metaPointer(raw: bigint): MetaPointer | null {
   if (BigInt.asIntN(64, raw) === BigInt(INVALID_BLOCK)) return null;
   return { block: Number(raw & 0x00ff_ffff_ffff_ffffn), index: Number(raw >> 56n) };
 }
@@ -63,11 +70,19 @@ function cString(bytes: Uint8Array): string {
   return new TextDecoder().decode(end === -1 ? bytes : bytes.subarray(0, end));
 }
 
+/** Every 4 KB header slot stores DuckDB's checksum of the rest of the slot in its first 8 bytes. */
+function slotChecksumOk(bytes: Uint8Array, offset: number): boolean {
+  const stored = new DataView(bytes.buffer, bytes.byteOffset + offset, 8).getBigUint64(0, true);
+  return checksum(bytes.subarray(offset + BLOCK_HEADER_SIZE, offset + HEADER_SIZE)) === stored;
+}
+
 function databaseHeader(view: DataView, offset: number): DatabaseHeader {
   const u64 = (at: number) => view.getBigUint64(offset + at, true);
+  const bytes = new Uint8Array(view.buffer, view.byteOffset, view.byteLength);
   return {
     offset,
     checksum: u64(0),
+    checksumOk: slotChecksumOk(bytes, offset),
     iteration: Number(u64(8)),
     metaBlock: metaPointer(u64(16)),
     freeList: metaPointer(u64(24)),
@@ -80,10 +95,17 @@ function databaseHeader(view: DataView, offset: number): DatabaseHeader {
 
 /** Parses the first 12 KB of a database file: the main header and both database headers. */
 export function parseHeaders(buffer: ArrayBuffer): FileHeader {
-  if (buffer.byteLength < BLOCKS_START) throw new NotDuckDBError("the file is shorter than DuckDB's headers");
-  const view = new DataView(buffer);
   const bytes = new Uint8Array(buffer);
   const magic = new TextDecoder().decode(bytes.subarray(8, 12));
+  if (buffer.byteLength < BLOCKS_START) {
+    const size = buffer.byteLength.toLocaleString("en-US");
+    throw new NotDuckDBError(
+      magic === "DUCK"
+        ? `the file is cut off: it has the DUCK magic bytes, but only ${size} of the 12,288 bytes of headers`
+        : `the file is ${size} bytes, shorter than DuckDB's 12,288 bytes of headers`,
+    );
+  }
+  const view = new DataView(buffer);
   if (magic !== "DUCK") throw new NotDuckDBError(`no DUCK magic bytes at offset 8`);
   const flags = [0, 1, 2, 3].map((i) => view.getBigUint64(20 + i * 8, true));
   const headers: [DatabaseHeader, DatabaseHeader] = [
@@ -92,6 +114,7 @@ export function parseHeaders(buffer: ArrayBuffer): FileHeader {
   ];
   return {
     checksum: view.getBigUint64(0, true),
+    checksumOk: slotChecksumOk(bytes, 0),
     storageVersion: Number(view.getBigUint64(12, true)),
     flags,
     encrypted: ((flags[0] ?? 0n) & ENCRYPTED_FLAG) !== 0n,
@@ -121,6 +144,45 @@ export function subBlockStart(header: DatabaseHeader, pointer: MetaPointer): num
 }
 
 type Read = (start: number, end: number) => Promise<ArrayBuffer>;
+
+/** The sub-blocks a metadata pointer leads through, following each one's 8-byte pointer to the next. */
+export interface Chain {
+  start: MetaPointer;
+  hops: MetaPointer[];
+  /** Why the chain couldn't be followed to its end; null when it was. */
+  error: string | null;
+}
+
+export async function readChain(
+  header: DatabaseHeader,
+  read: Read,
+  start: MetaPointer,
+  fileSize: number,
+): Promise<Chain> {
+  const hops: MetaPointer[] = [];
+  const seen = new Set<string>();
+  let at: MetaPointer | null = start;
+  try {
+    while (at) {
+      const key = `${at.block}.${at.index}`;
+      if (seen.has(key)) return { start, hops, error: `loops back to block ${at.block} sub-block ${at.index}` };
+      if (hops.length >= MAX_CHAIN) return { start, hops, error: `longer than ${MAX_CHAIN} sub-blocks` };
+      if (at.block >= header.blockCount || at.index >= METADATA_BLOCK_COUNT) {
+        return { start, hops, error: `points past the file, to block ${at.block} sub-block ${at.index}` };
+      }
+      seen.add(key);
+      const offset = subBlockStart(header, at);
+      if (offset + 8 > fileSize) return { start, hops, error: `block ${at.block} is past the end of the file` };
+      hops.push(at);
+      const next = await read(offset, offset + 8);
+      if (next.byteLength < 8) return { start, hops, error: `block ${at.block} is past the end of the file` };
+      at = metaPointer(new DataView(next).getBigUint64(0, true));
+    }
+  } catch (error) {
+    return { start, hops, error: error instanceof Error ? error.message : String(error) };
+  }
+  return { start, hops, error: null };
+}
 
 /** Reads a chain of metadata sub-blocks as one stream, the way DuckDB's MetadataReader does. */
 class MetadataReader {

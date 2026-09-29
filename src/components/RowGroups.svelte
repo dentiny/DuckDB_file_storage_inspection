@@ -6,7 +6,7 @@
   const inspector = getInspector();
   const { model } = inspector;
   const table = $derived(inspector.table);
-  const maxSize = $derived(Math.max(1, ...table.rowGroups.map((g) => g.bytes)));
+  const maxSize = $derived(Math.max(1, ...(table?.rowGroups ?? []).map((g) => g.bytes)));
   let list: HTMLDivElement;
 
   // Selections made outside the list (file map, column panel, a shared link) scroll it to the open row group.
@@ -22,7 +22,9 @@
 <section>
   <h2>
     Row groups <small
-      >{formatNumber(table.rowGroups.length)} in {table.qualified} · click one, or a segment in the file</small
+      >{table
+        ? `${formatNumber(table.rowGroups.length)} in ${table.qualified} · click one, or a segment in the file`
+        : "no tables to list"}</small
     >
   </h2>
   {#if model.tables.length > 1}
@@ -44,10 +46,10 @@
     <div class="header">
       <span></span><span>rg</span><span>rows</span><span></span><span class="r">size</span>
     </div>
-    {#each table.rowGroups as group (`${group.table}:${group.rg}`)}
+    {#each table?.rowGroups ?? [] as group (`${group.table}:${group.rg}`)}
       <RowGroupItem {group} {maxSize} />
     {:else}
-      <p class="empty">No rows are checkpointed into this table.</p>
+      <p class="empty">{table ? "No rows are checkpointed into this table." : "No tables could be read."}</p>
     {/each}
   </div>
 </section>

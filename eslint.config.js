@@ -6,7 +6,7 @@ import ts from "typescript-eslint";
 import svelteConfig from "./svelte.config.js";
 
 export default ts.config(
-  { ignores: ["dist"] },
+  { ignores: ["dist", "tmp"] },
   js.configs.recommended,
   ts.configs.strict,
   svelte.configs.recommended,

@@ -92,6 +92,12 @@
           </span>
         </div>
       {/if}
+    {:else}
+      <p class="empty">
+        {model.opened
+          ? "The database has no tables, views or sequences."
+          : "No catalog: DuckDB couldn't open the file."}
+      </p>
     {/each}
   </div>
 </section>
@@ -103,6 +109,13 @@
     outline: 1px solid var(--line);
     background: var(--surface-2);
     font-size: 12.5px;
+  }
+
+  .empty {
+    margin: 0;
+    padding: 6px 12px;
+    font-family: var(--font-sans);
+    color: var(--text-4);
   }
 
   .line {
