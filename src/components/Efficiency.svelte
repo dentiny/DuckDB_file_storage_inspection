@@ -2,8 +2,8 @@
   import { getInspector } from "../lib/inspector.svelte";
   import { readEfficiency, summarizeNames } from "../lib/duckdb/efficiency";
 
-  const { model } = getInspector();
-  const checks = readEfficiency(model);
+  const inspector = getInspector();
+  const checks = $derived(readEfficiency(inspector.model, inspector.wal));
 
   // Phones have no hover, so tapping a badge shows its explanation under the badges instead of a tooltip.
   let note = $state("");

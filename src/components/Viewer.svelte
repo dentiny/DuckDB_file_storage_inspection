@@ -4,6 +4,7 @@
   import Popover from "./Popover.svelte";
   import RowGroups from "./RowGroups.svelte";
   import Schema from "./Schema.svelte";
+  import WalPanel from "./WalPanel.svelte";
   import { setInspector, type Inspector } from "../lib/inspector.svelte";
   import { publishQuery, toQuery } from "../lib/share";
 
@@ -25,6 +26,7 @@
 <main>
   <FileSummary />
   <FileMap />
+  <WalPanel />
   <div class="columns">
     <Schema />
     <RowGroups />

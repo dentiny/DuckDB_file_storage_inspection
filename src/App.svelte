@@ -3,7 +3,7 @@
   import SourceInput from "./components/SourceInput.svelte";
   import Viewer from "./components/Viewer.svelte";
   import { Inspector, type Initial } from "./lib/inspector.svelte";
-  import { describeError, loadDuckDB } from "./lib/duckdb/load";
+  import { describeError, loadDuckDB, loadWal } from "./lib/duckdb/load";
   import { fileSource, nameOf, resolveInput, urlSource, type Source } from "./lib/duckdb/source";
   import { browserEngine } from "./lib/duckdb/wasm";
   import { fromQuery } from "./lib/share";
@@ -29,9 +29,15 @@
       const [file, engine] = await Promise.all([open(), browserEngine()]);
       if (id !== loadId) return;
       const model = await loadDuckDB(file, engine);
+      const wal = await loadWal(file, model).catch((error: unknown) => {
+        console.warn("couldn't read the write-ahead log", error);
+        return null;
+      });
       if (id !== loadId) return;
       const ms = Math.round(performance.now() - started);
-      inspector = new Inspector(model, source, initial, `read by DuckDB-Wasm ${engine.version} · ${ms} ms`);
+      const summary = `read by DuckDB-Wasm ${engine.version} · ${ms} ms`;
+      const searched = file.origin.kind !== "file" || file.walSize !== null;
+      inspector = new Inspector(model, source, initial, summary, wal, searched);
       status = null;
     } catch (error) {
       if (id !== loadId) return;
@@ -46,16 +52,23 @@
     void load(name, () => urlSource(resolveInput(raw, location.href), name), raw, initial);
   }
 
-  function openFile(file: File) {
-    input = file.name;
-    void load(file.name, () => fileSource(file), null);
+  /** Opens a database, paired with its `.wal` when both were picked or dropped together. */
+  function openFiles(files: File[]) {
+    const database = files.find((f) => !f.name.endsWith(".wal"));
+    if (!database) {
+      status = { text: "That's only a write-ahead log. Pick or drop the database file together with it.", error: true };
+      return;
+    }
+    const wal = files.find((f) => f.name === `${database.name}.wal`) ?? files.find((f) => f.name.endsWith(".wal"));
+    input = database.name;
+    void load(database.name, () => fileSource(database, wal), null);
   }
 
   function ondrop(event: DragEvent) {
     event.preventDefault();
     dragging = false;
-    const file = event.dataTransfer?.files[0];
-    if (file) openFile(file);
+    const files = [...(event.dataTransfer?.files ?? [])];
+    if (files.length) openFiles(files);
   }
 
   const initial = fromQuery(location.search);
@@ -81,7 +94,7 @@
     </p>
   </header>
 
-  <SourceInput bind:value={input} onsubmit={(value) => openInput(value)} onfile={openFile} />
+  <SourceInput bind:value={input} onsubmit={(value) => openInput(value)} onfiles={openFiles} />
 
   <p class="status" class:error={status?.error} role="status">{status?.text ?? ""}</p>
 
@@ -95,7 +108,7 @@
 </div>
 
 {#if dragging}
-  <div class="drop">Drop a .duckdb file anywhere</div>
+  <div class="drop">Drop a .duckdb file, and its .wal if it has one</div>
 {/if}
 
 <style>

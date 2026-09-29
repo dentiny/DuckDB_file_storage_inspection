@@ -1,6 +1,7 @@
 import { formatBytes, formatNumber, percent } from "../format";
 import { ROW_GROUP_SIZE, type DuckDBModel } from "./model";
 import { orderOf } from "./stats";
+import { isIncomplete, type WalFile } from "./wal";
 
 export interface Check {
   label: string;
@@ -16,7 +17,7 @@ const MAX_DETAIL_NAMES = 8;
 const MAX_FREE_SHARE = 0.1;
 
 /** How well DuckDB can skip, decompress and reuse this file: zonemaps, compression, row group fill, free space. */
-export function readEfficiency(model: DuckDBModel): Check[] {
+export function readEfficiency(model: DuckDBModel, log: WalFile | null = null): Check[] {
   const { tables, leaves, header } = model;
   const sorted = leaves
     .filter((leaf) => {
@@ -45,7 +46,12 @@ export function readEfficiency(model: DuckDBModel): Check[] {
   const pending = tables
     .filter((t) => t.rowGroups.some((g) => g.chunks.some((c) => c.segments.some((s) => s.row.hasUpdates))))
     .map((t) => t.qualified);
-  const wal = model.walSize ?? 0;
+  const wal = log?.size ?? model.walSize ?? 0;
+  const entries = log ? log.entries.filter((e) => e.category !== "commit" && e.typeName !== "WAL_VERSION").length : 0;
+  const incomplete = log ? log.entries.filter(isIncomplete).length : 0;
+  const walNote = log
+    ? ` It holds ${formatNumber(entries)} changes in ${formatNumber(log.commits)} commits${incomplete ? `, and ${formatNumber(incomplete)} incomplete entries DuckDB would skip` : ""}.`
+    : "";
 
   return [
     {
@@ -89,11 +95,11 @@ export function readEfficiency(model: DuckDBModel): Check[] {
       columns: pending,
       detail:
         wal > 0
-          ? `A ${formatBytes(wal)} write-ahead log sits next to the file. Its changes aren't in these blocks until the next checkpoint.`
+          ? `A ${formatBytes(wal)} write-ahead log sits next to the file. Its changes aren't in these blocks until the next checkpoint.${walNote}`
           : pending.length
             ? `${listNames(pending)} ${pending.length === 1 ? "has" : "have"} updates not yet merged into their segments.`
-            : model.walSize === null
-              ? "Every segment is checkpointed. A local file picked in the browser can't show whether a .wal sits next to it."
+            : model.walSize === null && !log
+              ? "Every segment is checkpointed. A file picked in the browser can't show whether a .wal sits next to it; pick both to see it."
               : "Every change is checkpointed into the file; there is no write-ahead log.",
     },
   ];
