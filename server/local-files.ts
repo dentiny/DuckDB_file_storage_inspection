@@ -54,7 +54,11 @@ export async function serveLocalFile(req: IncomingMessage, res: ServerResponse):
   } catch {
     return fail(res, 404, `no file at ${file}`);
   }
-  if (!(await isDuckDB(file))) return fail(res, 415, `${file} doesn't start with DuckDB's magic bytes`);
+  // A write-ahead log has no magic bytes of its own; serve it when the database it belongs to is one.
+  const database = file.endsWith(".wal") ? file.slice(0, -".wal".length) : file;
+  if (!(await isDuckDB(database).catch(() => false))) {
+    return fail(res, 415, `${database} doesn't start with DuckDB's magic bytes`);
+  }
 
   res.setHeader("accept-ranges", "bytes");
   res.setHeader("cache-control", "no-store");

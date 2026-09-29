@@ -3,7 +3,8 @@ import { measureBlocks } from "./extent";
 import type { Engine } from "./engine";
 import { activeHeader, NotDuckDBError, parseHeaders, readBlockUsage, type BlockUsage } from "./header";
 import { buildModel, type DuckDBModel } from "./model";
-import type { Source } from "./source";
+import type { Source, WalBytes } from "./source";
+import { parseWal, type WalFile } from "./wal";
 
 let attachments = 0;
 
@@ -38,6 +39,22 @@ export async function loadDuckDB(source: Source, engine: Engine): Promise<DuckDB
   } finally {
     await engine.detach(name, alias).catch((error: unknown) => console.warn("couldn't detach", error));
   }
+}
+
+/** Parses a write-ahead log against the database it belongs to, which supplies column names and the checkpoint. */
+export function walFor(wal: WalBytes, model: DuckDBModel): WalFile {
+  const tables = new Map(model.tables.map((t) => [t.qualified, t.def.columns.map((c) => c.name)]));
+  return parseWal(wal.bytes, {
+    name: wal.name,
+    size: wal.size,
+    tables,
+    checkpointIteration: model.header.iteration,
+  });
+}
+
+export async function loadWal(source: Source, model: DuckDBModel): Promise<WalFile | null> {
+  const wal = await source.readWal();
+  return wal ? walFor(wal, model) : null;
 }
 
 /** A sentence saying why a file couldn't be read, for the status line. */

@@ -63,3 +63,42 @@ test("reports files that aren't DuckDB databases", async ({ page }) => {
   await page.goto("/?db=index.html");
   await expect(page.getByRole("status")).toContainText("doesn't look like a DuckDB database");
 });
+
+test("lists the write-ahead log and greys out the torn last commit", async ({ page }) => {
+  await page.goto("/?db=orders.duckdb");
+  const wal = page.getByRole("region", { name: "Write-ahead log" });
+  await expect(wal).toContainText("11 commits");
+  await expect(wal).toContainText("2 incomplete");
+  await expect(wal.locator("button.row.incomplete")).toHaveCount(2);
+  await expect(wal.locator("button.row.incomplete").last()).toContainText("incomplete");
+  await expect(page.getByRole("button", { name: /Checkpointed/ })).not.toHaveClass(/passed/);
+});
+
+test("shows what a WAL entry holds when clicked", async ({ page }) => {
+  await page.goto("/?db=orders.duckdb");
+  const wal = page.getByRole("region", { name: "Write-ahead log" });
+  await wal.locator("button.row", { hasText: "INSERT 2 rows into shop.orders" }).click();
+  await expect(wal.getByRole("table")).toContainText("12.50");
+  await expect(wal.getByRole("table")).toContainText("{'city': 'Oslo', 'express': true}");
+  await wal.locator("button.row", { hasText: "INSERT 500 rows" }).click();
+  await expect(wal).toContainText("truncated: the entry is");
+  await expect(wal).toContainText("500 rows, but their values are cut off");
+});
+
+test("pairs a picked database with its .wal", async ({ page }) => {
+  await page.goto("/");
+  await page
+    .locator("input[type=file]")
+    .first()
+    .setInputFiles([path.resolve("public/orders.duckdb"), path.resolve("public/orders.duckdb.wal")]);
+  await expect(page.getByRole("region", { name: "Write-ahead log" })).toContainText("2 incomplete");
+});
+
+test("opens a .wal for a database picked on its own", async ({ page }) => {
+  await page.goto("/");
+  await page.locator("input[type=file]").first().setInputFiles(path.resolve("public/orders.duckdb"));
+  const wal = page.getByRole("region", { name: "Write-ahead log" });
+  await expect(wal).toContainText("can't see the .wal next to it");
+  await wal.locator("input[type=file]").setInputFiles(path.resolve("public/orders.duckdb.wal"));
+  await expect(wal).toContainText("11 commits");
+});

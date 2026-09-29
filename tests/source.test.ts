@@ -3,7 +3,7 @@ import type { AddressInfo } from "node:net";
 import path from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { resolveLocalPath, serveLocalFile } from "../server/local-files";
-import { isLocalPath, nameOf, resolveInput, urlSource } from "../src/lib/duckdb/source";
+import { isLocalPath, nameOf, resolveInput, urlSource, walUrl } from "../src/lib/duckdb/source";
 import { parseStats } from "../src/lib/duckdb/stats";
 import { fromQuery, toQuery } from "../src/lib/share";
 
@@ -20,6 +20,13 @@ describe("resolveInput", () => {
   it("makes relative URLs absolute, since DuckDB-Wasm fetches from its worker", () => {
     expect(resolveInput("sensors.duckdb", base)).toBe("http://localhost:5173/sensors.duckdb");
     expect(resolveInput("https://example.com/f.duckdb", base)).toBe("https://example.com/f.duckdb");
+  });
+
+  it("finds the write-ahead log next to a URL or a local path", () => {
+    expect(walUrl("https://example.com/db/app.duckdb?x=1")).toBe("https://example.com/db/app.duckdb.wal?x=1");
+    expect(walUrl(resolveInput("/tmp/app.duckdb", base))).toBe(
+      "http://localhost:5173/@local?path=%2Ftmp%2Fapp.duckdb.wal",
+    );
   });
 
   it("names files by their last path segment", () => {
@@ -73,6 +80,18 @@ describe("local file server", async () => {
     expect(source.walSize).toBe(0);
     expect(new TextDecoder().decode(new Uint8Array(source.head, 8, 4))).toBe("DUCK");
     expect((await source.read(100, 200)).byteLength).toBe(100);
+  });
+
+  it("serves the write-ahead log next to a database, and nothing when there is none", async () => {
+    const orders = await urlSource(url(path.resolve("public/orders.duckdb")), "orders.duckdb");
+    expect(orders.walSize).toBeGreaterThan(0);
+    const wal = await orders.readWal();
+    expect(wal?.name).toBe("orders.duckdb.wal");
+    expect(wal?.size).toBe(orders.walSize);
+    expect([...(wal?.bytes.subarray(0, 2) ?? [])]).toEqual([0x64, 0x00]);
+    const sensors = await urlSource(url(path.resolve("public/sensors.duckdb")));
+    expect(await sensors.readWal()).toBeNull();
+    expect((await fetch(url(path.resolve("package.json") + ".wal"))).status).toBe(404);
   });
 
   it("refuses files that aren't DuckDB databases", async () => {

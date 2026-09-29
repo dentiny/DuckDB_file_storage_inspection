@@ -1,5 +1,6 @@
 import { getContext, setContext } from "svelte";
 import type { DuckDBModel, Piece, RowGroupInfo } from "./duckdb/model";
+import type { WalFile } from "./duckdb/wal";
 
 export interface Popover {
   piece: Piece;
@@ -35,9 +36,24 @@ export class Inspector {
   /** Whether the last reveal should also scroll the page, when the list may be off screen. Read untracked. */
   revealInPage = false;
   popover = $state.raw<Popover | null>(null);
+  /** The write-ahead log next to the database, once found or picked. */
+  wal = $state.raw<WalFile | null>(null);
+  /** Whether the log could be looked for; a file picked in the browser can't see its sibling `.wal`. */
+  readonly walSearched: boolean;
+  /** Index of the WAL entry whose contents are shown. */
+  selectedWalEntry = $state<number | null>(null);
 
-  constructor(model: DuckDBModel, source: string | null, initial: Initial, loadSummary: string) {
+  constructor(
+    model: DuckDBModel,
+    source: string | null,
+    initial: Initial,
+    loadSummary: string,
+    wal: WalFile | null = null,
+    walSearched = true,
+  ) {
     this.model = model;
+    this.wal = wal;
+    this.walSearched = walSearched;
     this.source = source;
     this.loadSummary = loadSummary;
     const byRows = model.tables.reduce(
@@ -94,6 +110,10 @@ export class Inspector {
     if (table !== undefined) this.selectTable(table);
     this.selectedLeaf = this.selectedLeaf === leaf ? null : leaf;
     this.showAllRowGroups = false;
+  }
+
+  toggleWalEntry(index: number): void {
+    this.selectedWalEntry = this.selectedWalEntry === index ? null : index;
   }
 
   showPopover(piece: Piece | null, event: MouseEvent, opensRowGroup = false): void {

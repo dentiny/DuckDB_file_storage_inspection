@@ -2,12 +2,15 @@
   interface Props {
     value: string;
     onsubmit: (value: string) => void;
-    onfile: (file: File) => void;
+    onfiles: (files: File[]) => void;
   }
 
-  let { value = $bindable(), onsubmit, onfile }: Props = $props();
+  let { value = $bindable(), onsubmit, onfiles }: Props = $props();
 
-  const examples = [{ label: "sensors (sorted, nested types, long strings, free blocks)", value: "sensors.duckdb" }];
+  const examples = [
+    { label: "sensors (sorted, nested types, long strings, free blocks)", value: "sensors.duckdb" },
+    { label: "orders (write-ahead log with a torn last commit)", value: "orders.duckdb" },
+  ];
 
   function submit(event: SubmitEvent) {
     event.preventDefault();
@@ -15,8 +18,8 @@
   }
 
   function onchange(event: Event & { currentTarget: HTMLInputElement }) {
-    const file = event.currentTarget.files?.[0];
-    if (file) onfile(file);
+    const files = [...(event.currentTarget.files ?? [])];
+    if (files.length) onfiles(files);
   }
 </script>
 
@@ -30,7 +33,9 @@
     placeholder="A path on this machine, like ~/data/app.duckdb, or a URL that allows range requests"
   />
   <button type="submit" class="primary">Inspect</button>
-  <label class="secondary">Open file<input type="file" accept=".duckdb,.db,.ddb" hidden {onchange} /></label>
+  <label class="secondary"
+    >Open file<input type="file" accept=".duckdb,.db,.ddb,.wal" multiple hidden {onchange} /></label
+  >
 </form>
 
 <div class="examples">
