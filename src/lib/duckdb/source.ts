@@ -139,17 +139,3 @@ export async function fileSource(file: File, wal?: File): Promise<Source> {
     readWal: () => fileWal(wal),
   };
 }
-
-export function bufferSource(name: string, bytes: Uint8Array, wal?: Uint8Array): Source {
-  const copy = () => bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
-  const buffer = copy();
-  return {
-    name,
-    byteLength: bytes.byteLength,
-    head: buffer.slice(0, BLOCKS_START),
-    walSize: wal ? wal.length : null,
-    origin: { kind: "buffer", bytes },
-    read: async (start, end) => buffer.slice(start, end),
-    readWal: async () => (wal ? { name: `${name}.wal`, bytes: wal, size: wal.length } : null),
-  };
-}
