@@ -15,13 +15,5 @@
     "allowJs": false,
     "noEmit": true
   },
-  "include": [
-    "src/**/*.ts",
-    "src/**/*.svelte",
-    "tests/**/*.ts",
-    "e2e/**/*.ts",
-    "scripts/**/*.ts",
-    "server/**/*.ts",
-    "*.config.ts"
-  ]
+  "include": ["src/**/*.ts", "src/**/*.svelte", "scripts/**/*.ts", "server/**/*.ts", "*.config.ts"]
 }

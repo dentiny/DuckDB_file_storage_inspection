@@ -37,8 +37,7 @@ An entry is shown in gray and marked **incomplete** when it is cut off by the en
 ## Development
 
 ```sh
-npm run verify     # lint, type-check, unit tests, build
-npm run test:e2e   # browser tests (first run: npx playwright install chromium)
+npm run verify     # lint, type-check, build
 npm run sample     # rebuild public/sensors.duckdb and public/orders.duckdb(.wal) with the DuckDB CLI
 ```
 
