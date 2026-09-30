@@ -114,7 +114,7 @@ export function describeError(error: unknown): string {
       : `this doesn't look like a DuckDB database (${message}).`;
   }
   if (error instanceof TypeError && /fetch/i.test(message)) {
-    return "the request was blocked. Check the URL, and that the server allows cross-origin (CORS) range requests.";
+    return "couldn't reach the viewer's server. Is `npm start` still running? Restart it and reload the page.";
   }
   if (/newer version of DuckDB|storage version/i.test(message)) {
     return `it was written by a DuckDB this viewer can't read yet (${message}).`;

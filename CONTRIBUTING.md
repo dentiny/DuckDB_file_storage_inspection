@@ -32,7 +32,7 @@ npm run verify       # lint, type-check, build
 | `src/lib/duckdb/serialization/`    | DuckDB's binary serialization format: the reader, logical types, values and vectors, expressions.                          |
 | `src/components/Allocation.svelte` | The block allocation card: both database headers, where their pointers lead, and every block by state.                     |
 | `src/lib/duckdb/wasm.ts`           | DuckDB-Wasm in a worker.                                                                                                   |
-| `src/lib/duckdb/source.ts`         | Reading from a picked file, a URL, or a local path via `server/local-files.ts`.                                            |
+| `src/lib/duckdb/source.ts`         | Reading from a picked file, or a local path via `server/local-files.ts`.                                                   |
 | `src/lib/inspector.svelte.ts`      | The loaded file plus the user's selection (table, row group, column, popover). Components read it from context.            |
 | `src/lib/popover.ts`               | What the popover says about each kind of byte range.                                                                       |
 | `src/components/`                  | One Svelte 5 component per section of the page.                                                                            |

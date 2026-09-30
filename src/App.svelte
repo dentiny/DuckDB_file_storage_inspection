@@ -20,6 +20,8 @@
   import { WalView } from "./lib/walview.svelte";
 
   let input = $state("");
+  /** Names of the files dropped, or picked in the browser's dialog; browsers don't give their paths. */
+  let picked = $state<string | null>(null);
   let status = $state<{ text: string; error?: boolean } | null>(null);
   let inspector = $state.raw<Inspector | null>(null);
   /** A write-ahead log opened without its database. */
@@ -75,17 +77,19 @@
 
   function openInput(raw: string, initial?: Initial) {
     input = raw;
+    picked = null;
     const name = nameOf(raw);
-    const url = resolveInput(raw, location.href);
-    if (name.endsWith(".wal")) void loadWalOnly(name, () => fetchWal(url, name), raw);
-    else void load(name, () => urlSource(url, name), raw, initial);
+    const url = () => resolveInput(raw, location.href);
+    if (name.endsWith(".wal")) void loadWalOnly(name, () => fetchWal(url(), name), raw);
+    else void load(name, () => urlSource(url(), name), raw, initial);
   }
 
   /** Opens a database, paired with its `.wal` when both were picked or dropped together; or a `.wal` alone. */
   function openFiles(files: File[]) {
     const database = files.find((f) => !f.name.endsWith(".wal"));
     const wal = files.find((f) => f.name === `${database?.name}.wal`) ?? files.find((f) => f.name.endsWith(".wal"));
-    input = (database ?? wal)?.name ?? "";
+    input = "";
+    picked = [database, wal].flatMap((f) => (f ? [f.name] : [])).join(" and ");
     if (database) void load(database.name, () => fileSource(database, wal), null);
     else if (wal) void loadWalOnly(wal.name, () => walFromFile(wal), null);
   }
@@ -121,6 +125,12 @@
   </header>
 
   <SourceInput bind:value={input} onsubmit={(value) => openInput(value)} onfiles={openFiles} />
+
+  {#if picked}
+    <p class="picked">
+      Opened {picked}. Browsers don't tell a page where a dropped file is; use Open file or type its path to see it.
+    </p>
+  {/if}
 
   <p class="status" class:error={status?.error} role="status">{status?.text ?? ""}</p>
 
@@ -166,6 +176,12 @@
 
   header p {
     margin: 4px 0 0;
+    color: var(--text-3);
+  }
+
+  .picked {
+    margin: 8px 0 0;
+    font-size: 12px;
     color: var(--text-3);
   }
 

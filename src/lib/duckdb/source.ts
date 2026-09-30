@@ -1,5 +1,5 @@
 import { BLOCKS_START } from "./header";
-import { LOCAL_PREFIX, WAL_HEADER } from "./localRoute";
+import { LOCAL_PREFIX, PICK_ROUTE, WAL_HEADER } from "./localRoute";
 
 /** Where the database bytes come from, which decides how DuckDB-Wasm is told to open it. */
 export type Origin =
@@ -29,7 +29,7 @@ export interface Source {
   readWal(): Promise<WalBytes | null>;
 }
 
-/** Whether the input names a file on this machine rather than a URL. */
+/** Whether the input names a file on this machine rather than one of the bundled samples. */
 const isLocalPath = (input: string) => /^(\/|~\/|\.\.?\/|file:\/\/)/.test(input.trim());
 
 /** The full size from a 206 response's Content-Range, or `fallback` when the server sent the whole file. */
@@ -39,12 +39,15 @@ function totalSize(res: Response, fallback: number): number {
 }
 
 /**
- * Turns a local path into a URL on the local file server, and relative URLs into absolute ones: DuckDB-Wasm fetches
- * from its worker, where a relative URL would resolve against the worker script.
+ * Turns a local path into a URL on the local file server, and a bundled sample's name into an absolute URL: DuckDB-Wasm
+ * fetches from its worker, where a relative URL would resolve against the worker script.
  */
 export function resolveInput(input: string, base: string): string {
   const s = input.trim();
-  if (!isLocalPath(s)) return new URL(s, base).href;
+  if (!isLocalPath(s)) {
+    if (/^[a-z][a-z\d+.-]*:/i.test(s)) throw new Error("only files on this machine can be opened, not URLs");
+    return new URL(s, base).href;
+  }
   const path = s.replace(/^file:\/\//, "");
   return new URL(`${LOCAL_PREFIX}?path=${encodeURIComponent(path)}`, base).href;
 }
@@ -81,6 +84,21 @@ export async function fetchWal(url: string, name: string): Promise<WalBytes | nu
 export async function walFromFile(file: File): Promise<WalBytes> {
   const bytes = new Uint8Array(await file.slice(0, MAX_WAL_BYTES).arrayBuffer());
   return { name: file.name, bytes, size: file.size };
+}
+
+/**
+ * Asks the local server to show the system's open-file dialog, which, unlike the browser's, gives the file's path.
+ * Returns the path, null when cancelled, or undefined when there's no such server, as in a static build.
+ */
+export async function pickLocalPath(): Promise<string | null | undefined> {
+  try {
+    const res = await fetch(PICK_ROUTE, { method: "POST" });
+    if (!res.ok) return undefined;
+    const { path } = (await res.json()) as { path?: string };
+    return path ?? null;
+  } catch {
+    return undefined;
+  }
 }
 
 export function nameOf(input: string): string {

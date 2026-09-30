@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { pickLocalPath } from "../lib/duckdb/source";
+
   interface Props {
     value: string;
     onsubmit: (value: string) => void;
@@ -19,7 +21,23 @@
 
   function onchange(event: Event & { currentTarget: HTMLInputElement }) {
     const files = [...(event.currentTarget.files ?? [])];
+    event.currentTarget.value = "";
     if (files.length) onfiles(files);
+  }
+
+  let picker: HTMLInputElement;
+  let choosing = $state(false);
+
+  /** Opens the system's dialog through the local server, so the path is known; the browser's picker otherwise. */
+  async function choose() {
+    choosing = true;
+    try {
+      const path = await pickLocalPath();
+      if (path === undefined) picker.click();
+      else if (path !== null) onsubmit(path);
+    } finally {
+      choosing = false;
+    }
   }
 </script>
 
@@ -29,13 +47,12 @@
     type="text"
     spellcheck="false"
     autocomplete="off"
-    aria-label="DuckDB database path or URL"
-    placeholder="A path on this machine, like ~/data/app.duckdb, or a URL that allows range requests"
+    aria-label="DuckDB database path"
+    placeholder="A path on this machine, like ~/data/app.duckdb"
   />
   <button type="submit" class="primary">Inspect</button>
-  <label class="secondary"
-    >Open file<input type="file" accept=".duckdb,.db,.ddb,.wal" multiple hidden {onchange} /></label
-  >
+  <button type="button" class="secondary" disabled={choosing} onclick={choose}>Open file</button>
+  <input bind:this={picker} type="file" accept=".duckdb,.db,.ddb,.wal" multiple hidden {onchange} />
 </form>
 
 <div class="examples">
@@ -82,8 +99,14 @@
     padding: 0 14px;
     border: 1px solid #d1d5db;
     border-radius: var(--radius);
+    background: #fff;
+    font: inherit;
     color: var(--text-2);
     cursor: pointer;
+  }
+
+  .secondary:disabled {
+    cursor: progress;
   }
 
   .examples {

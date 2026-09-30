@@ -4,7 +4,7 @@ See how a DuckDB database file is laid out on disk: headers, metadata, row group
 
 ![A DuckDB file with a row group open and a segment's details in a popover](docs/overview.png)
 
-Type a path on this machine (`~/data/app.duckdb`), open or drop a file, or paste a URL that allows range requests. The file is attached read-only in [DuckDB-Wasm](https://github.com/duckdb/duckdb-wasm) and read block by block, so large databases don't have to be downloaded whole.
+Type a path on this machine (`~/data/app.duckdb`), or open or drop a file. Only local files are supported, not URLs. The file is attached read-only in [DuckDB-Wasm](https://github.com/duckdb/duckdb-wasm) and read block by block, so large databases aren't loaded into memory whole.
 
 ## Usage
 
@@ -19,7 +19,7 @@ npm start -- ~/data/app.duckdb --no-open    # prints the link instead of opening
 
 `node scripts/start.ts` does the same without npm.
 
-Paths are served by a small route in the dev and preview servers (`server/local-files.ts`) that only serves files starting with DuckDB's magic bytes, plus the `.wal` next to such a file or a lone file that starts like a WAL. It answers only the app itself on this machine: requests from other machines (even with `--host`), with another Host (DNS rebinding) or from another site's page get a 403. Files picked with **Open file** never leave the browser; pick the `.wal` together with the database to see it, since browsers can't see sibling files.
+Paths are served by a small route in the dev and preview servers (`server/local-files.ts`) that only serves files starting with DuckDB's magic bytes, plus the `.wal` next to such a file or a lone file that starts like a WAL. It answers only the app itself on this machine: requests from other machines (even with `--host`), with another Host (DNS rebinding) or from another site's page get a 403. **Open file** asks the server to show the system's open-file dialog (`osascript` on macOS, `zenity` or `kdialog` on Linux, PowerShell on Windows) and opens the chosen file by its full path, so its `.wal` is found too. Without that server, or without a dialog program, it falls back to the browser's picker, which, like dropping a file, only gives the page the file's name and contents; pick or drop the `.wal` together with the database to see it.
 
 ## What it shows
 
@@ -42,7 +42,7 @@ Below, every block as a square by state (table data, metadata, free, other such 
 
 ![A WAL whose last commit was cut off: two entries in gray marked incomplete, one opened to show why](docs/wal.png)
 
-The `.wal` next to the database (the same URL or path with `.wal` appended), parsed directly. Each entry's size and checksum are checked the way DuckDB's replay does, and entries are grouped into transactions by their commits. The strip on top shows every entry by size.
+The `.wal` next to the database (the same path with `.wal` appended), parsed directly. Each entry's size and checksum are checked the way DuckDB's replay does, and entries are grouped into transactions by their commits. The strip on top shows every entry by size.
 
 An entry is shown in gray and marked **incomplete** when it is cut off by the end of the file, fails its checksum, comes after a damaged entry, or has no commit after it. DuckDB skips all of these on replay. The block layout shows only checkpointed data; the WAL panel shows what isn't checkpointed yet.
 
@@ -60,7 +60,7 @@ A database cut off before its end (a crash while it grew, an interrupted copy) s
 
 - Checked against files written by DuckDB 1.5.5 (storage version 64), in Chromium, Firefox and WebKit.
 - DuckDB-Wasm is pinned to `1.33.1-dev57.0`, a prerelease: it is npm's `latest` tag and the only build that tracks DuckDB 1.5. Move to a stable release once one is published.
-- Local paths need `npm start` (the dev server). A static build of `dist/` still opens picked files and URLs.
+- Local paths need `npm start` (the dev server). A static build of `dist/` still opens picked files.
 
 ## Not supported
 
