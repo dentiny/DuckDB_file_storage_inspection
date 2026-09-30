@@ -4,7 +4,8 @@ import { homedir } from "node:os";
 import path from "node:path";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Connect, Plugin } from "vite";
-import { LOCAL_PREFIX, WAL_HEADER } from "../src/lib/duckdb/localRoute.ts";
+import { LOCAL_PREFIX, PICK_ROUTE, WAL_HEADER } from "../src/lib/duckdb/localRoute.ts";
+import { pickFile } from "./pick-file.ts";
 
 /** Resolves `~` and relative paths against the directory the server was started in. */
 function resolveLocalPath(raw: string, cwd = process.cwd()): string {
@@ -127,7 +128,23 @@ function fromThisMachine(req: IncomingMessage): boolean {
   }
 }
 
+async function servePick(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  if (req.method !== "POST") return fail(res, 405, "use POST");
+  // Unlike reads, a dialog is a side effect a plain <img> or form from another site could trigger without an Origin.
+  if (req.headers.origin === undefined) return fail(res, 403, "missing Origin");
+  const picked = await pickFile();
+  if (picked === undefined) return fail(res, 501, "no file dialog on this system");
+  res.setHeader("content-type", "application/json");
+  res.setHeader("cache-control", "no-store");
+  res.end(JSON.stringify(picked === null ? {} : { path: picked }));
+}
+
 const middleware: Connect.NextHandleFunction = (req, res, next) => {
+  if (req.url === PICK_ROUTE) {
+    if (!fromThisMachine(req)) return fail(res, 403, "the file dialog is only shown to this machine");
+    servePick(req, res).catch((error: unknown) => fail(res, 500, String(error)));
+    return;
+  }
   if (!req.url?.startsWith(`${LOCAL_PREFIX}?`)) return next();
   if (!fromThisMachine(req)) return fail(res, 403, "local files are only served to this machine");
   serveLocalFile(req, res).catch((error: unknown) => fail(res, 500, String(error)));
